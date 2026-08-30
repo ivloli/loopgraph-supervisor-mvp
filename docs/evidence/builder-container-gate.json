@@ -1,0 +1,18 @@
+{
+  "receipt_hash": "ed786a7783f70900ff742f8c25e6e51f281663d250d0df0812dc3752e7522632",
+  "result": {
+    "docker_socket_absent": true,
+    "holdout_absent": true,
+    "host_path_absent": true,
+    "image": "debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
+    "network_denied": true,
+    "non_root": true,
+    "passed": true,
+    "read_only_context_preserved": true,
+    "read_only_context_write_denied": true,
+    "rootfs_write_denied": true,
+    "sibling_absent": true,
+    "workspace_write_allowed": true
+  },
+  "schema_version": 1
+}

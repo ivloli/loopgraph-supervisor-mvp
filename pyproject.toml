@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopgraph-supervisor"
+version = "0.1.0"
+description = "DSH-first, explainable RSI MVP supervisor"
+requires-python = ">=3.10"
+dependencies = ["deepseek-harness-sdk==0.1.1rc1"]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.15,<2", "pytest==9.1.1", "ruff>=0.11,<1"]
+
+[project.scripts]
+loopgraph-supervisor = "loopgraph_supervisor.main:main"
+loopgraph = "loopgraph_supervisor.cli:main"
+
+[tool.setuptools]
+packages = ["loopgraph_supervisor"]
+
+[tool.setuptools.package-data]
+loopgraph_supervisor = ["web/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 160
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true

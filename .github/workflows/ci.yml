@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/dsh-loopgraph-supervisor/package-lock.json
+      - run: uv sync --extra dev --locked
+      - run: uv run loopgraph --help
+      - run: uv run python -c 'import importlib.metadata as m; assert m.version("deepseek-harness-sdk") == "0.1.1rc1"'
+      - run: uv run ruff check .
+      - run: uv run mypy loopgraph_supervisor tests
+      - run: uv run pytest -q
+      - run: LOOPGRAPH_DOCKER_E2E=1 uv run pytest -q tests/test_container_gate.py
+      - run: npm ci
+        working-directory: packages/dsh-loopgraph-supervisor
+      - run: npm run build
+        working-directory: packages/dsh-loopgraph-supervisor
+      - run: npm test
+        working-directory: packages/dsh-loopgraph-supervisor

@@ -1,0 +1,8 @@
+{
+  "ambient_secret_absent": true,
+  "holdout_read_denied": false,
+  "host_write_denied": true,
+  "ready_for_blind_holdout": false,
+  "sandbox_available": true,
+  "workspace_write_allowed": true
+}

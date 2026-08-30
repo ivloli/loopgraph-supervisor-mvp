@@ -1,0 +1,17 @@
+{
+  "receipt_hash": "b114adde582d8d4dc4d84ceb6debe920b76ff80acd846c804cbde8f492270f7b",
+  "result": {
+    "bridge_peer_denied": true,
+    "credential_not_in_metadata": true,
+    "deepseek_path_reached_upstream": true,
+    "direct_network_denied": true,
+    "disallowed_path_denied": true,
+    "image": "node@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32",
+    "out_of_budget_request_denied": true,
+    "passed": true,
+    "relay_health_ok": true,
+    "relay_non_root": true,
+    "relay_script_hash": "b96ae02f0301089ae6600efebdb9014db3e1747bc32e6adf43d776160988ae84"
+  },
+  "schema_version": 1
+}

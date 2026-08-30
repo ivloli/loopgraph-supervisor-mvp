@@ -1,0 +1,6 @@
+- insert:
+    - id: dsh-loopgraph-supervisor
+      name: dsh-loopgraph-supervisor
+      config:
+        maxAttempts: 3
+        requirePromotionApproval: true

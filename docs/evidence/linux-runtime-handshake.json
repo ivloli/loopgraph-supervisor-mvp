@@ -1,0 +1,15 @@
+{
+  "receipt_hash": "c606636b424dcf7007e99312c50558a9d19076aab800ca7289f4bc863578b9ca",
+  "result": {
+    "cordis_sha256": "048031be7331f2b68c81b3cbfacacc06ee767dae1e8f00cbdc3137c1e55001af",
+    "image": "debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
+    "network_mode": "loopgraph-internal-b98e72641b3c437f9ad4d582d61d1ad6",
+    "passed": true,
+    "runtime_sha256": "67b38d1002e680775a61d7ba8bba545927a4e479cacaf7b786e99c98492d55b6",
+    "runtime_version": "0.1.1rc1",
+    "sdk_version": "0.1.1rc1",
+    "server_name": "deepseek-harness-sdk-runtime",
+    "server_version": "0.0.1"
+  },
+  "schema_version": 1
+}

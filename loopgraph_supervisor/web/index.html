@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LoopGraph 控制台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">LG</div>
+        <div><strong>LoopGraph</strong><span>DSH-first Supervisor</span></div>
+      </div>
+      <div class="runtime-card"><span class="pulse"></span><div><strong>控制平面在线</strong><small>A 版 / Python SDK</small></div></div>
+      <nav class="nav" aria-label="功能导航">
+        <p class="nav-label">工作台</p>
+        <button class="nav-item active" data-tab="overview"><span>⌂</span>总览</button>
+        <button class="nav-item" data-tab="decisions"><span>◇</span>决策账本</button>
+        <button class="nav-item" data-tab="evidence"><span>✓</span>验证证据</button>
+        <button class="nav-item" data-tab="versions"><span>⑂</span>版本与回滚</button>
+        <button class="nav-item" data-tab="activity"><span>≋</span>活动日志</button>
+        <button class="nav-item" data-tab="create"><span>＋</span>新建任务</button>
+      </nav>
+      <div class="workflow-heading"><span>仓库 / 工作流</span><button id="refresh" title="刷新工作流">↻</button></div>
+      <div id="workflow-list" class="workflow-list"></div>
+      <div class="sidebar-footer">
+        <span>事实来源</span>
+        <strong>SQLite + Git + DSH Session</strong>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div><p id="breadcrumb">控制台 / 总览</p><h1 id="page-title">运行总览</h1></div>
+        <div class="top-actions"><button id="top-refresh" class="ghost">刷新数据</button><span id="status" class="status neutral">未选择任务</span></div>
+      </header>
+
+      <section id="welcome" class="welcome">
+        <div class="welcome-copy">
+          <span class="kicker">可解释的递归改进控制平面</span>
+          <h2>让 Agent 执行，<br><em>让证据做决定。</em></h2>
+          <p>选择左侧工作流，查看 DSH 执行、独立验证、人工审批、版本晋级与回滚的完整证据链。</p>
+          <button data-open-create>创建第一个工作流</button>
+        </div>
+        <div class="welcome-diagram">
+          <div>DSH 执行</div><i>→</i><div>Verifier</div><i>→</i><div>HITL</div><i>→</i><div>Git 晋级</div>
+        </div>
+      </section>
+
+      <div id="workspace" hidden>
+        <section id="hitl-banner" class="hitl-banner" hidden>
+          <div class="hitl-icon">!</div>
+          <div class="hitl-copy"><span class="kicker">HUMAN IN THE LOOP</span><h2>等待人工审批</h2><p id="hitl-reason">自动流程已暂停，请检查证据后选择下一步。</p></div>
+          <div class="hitl-actions">
+            <button id="hitl-approve" class="approve">批准晋级</button>
+            <button id="hitl-retry">要求重试</button>
+            <button id="hitl-reject" class="danger">拒绝任务</button>
+          </div>
+        </section>
+        <section id="recovery-banner" class="recovery-banner" hidden>
+          <div class="recovery-icon">?</div>
+          <div class="hitl-copy"><span class="kicker">UNCERTAIN RECOVERY</span><h2>执行结果不确定</h2><p>DSH 可能已经修改 workspace，但结果尚未落盘。请选择明确的恢复策略，系统不会自动重试。</p></div>
+          <div class="recovery-actions">
+            <button id="recover-verify" class="approve">验证现状</button>
+            <button id="recover-retry">同 Token 重试</button>
+            <button id="recover-restore">恢复 Baseline</button>
+            <button id="recover-abort" class="danger">终止并保留现场</button>
+          </div>
+        </section>
+        <section class="tab-panel active" data-panel="overview">
+          <div class="section-intro"><div><span class="kicker">OVERVIEW</span><h2>工作流运行总览</h2><p>当前 durable state、循环节点和人工控制入口。</p></div><div id="workflow-actions" class="action-row"></div></div>
+          <div id="metrics" class="metrics"></div>
+          <section class="surface graph-surface"><div class="surface-head"><div><h3>LoopGraph 状态路径</h3><p>高亮节点是重启后继续执行的恢复位置。</p></div></div><div id="graph" class="graph"></div></section>
+          <div class="split">
+            <section class="surface"><div class="surface-head"><div><h3>目标与验收契约</h3><p>Agent 目标和 Supervisor 独立验证的边界。</p></div></div><div id="contract"></div></section>
+            <section class="surface"><div class="surface-head"><div><h3>最近决策</h3><p>系统为什么允许或阻止下一步。</p></div></div><div id="latest-decisions"></div></section>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="decisions">
+          <div class="section-intro"><div><span class="kicker">DECISION LEDGER</span><h2>决策账本</h2><p>记录问题、选择、证据、替代方案、风险和预期效果；不是模型隐藏思维链。</p></div></div>
+          <div id="decisions" class="ledger"></div>
+        </section>
+
+        <section class="tab-panel" data-panel="evidence">
+          <div class="section-intro"><div><span class="kicker">VERIFICATION</span><h2>验证证据</h2><p>由 Supervisor 执行命令并保存 exit code、stdout 和 stderr，不接受 Agent 自报成功。</p></div></div>
+          <div id="evidence-summary" class="metrics compact"></div>
+          <div id="evidence" class="evidence-grid"></div>
+        </section>
+
+        <section class="tab-panel" data-panel="versions">
+          <div class="section-intro"><div><span class="kicker">VERSION CONTROL</span><h2>版本与回滚</h2><p>每个版本绑定 workflow 和 Git commit；dirty worktree 会拒绝回滚。</p></div></div>
+          <div id="versions" class="version-timeline"></div>
+        </section>
+
+        <section class="tab-panel" data-panel="activity">
+          <div class="section-intro"><div><span class="kicker">AUDIT TRAIL</span><h2>活动日志</h2><p>追加式状态转换记录，用于观察、故障定位和恢复解释。</p></div></div>
+          <div id="activity" class="activity"></div>
+        </section>
+      </div>
+
+      <section class="tab-panel create-panel" data-panel="create">
+        <div class="section-intro"><div><span class="kicker">NEW WORKFLOW</span><h2>创建受控任务</h2><p>源仓库必须 clean；A 版会创建独立 worktree，避免多个 Agent 互相污染。</p></div></div>
+        <form id="create-form" class="create-form">
+          <label><span>工作流 ID</span><input name="id" placeholder="parser-empty-input-fix" required><small>用于状态、worktree、版本和审计关联。</small></label>
+          <label class="wide"><span>任务目标</span><textarea name="goal" rows="3" placeholder="修复 parser 的空输入行为，并保证测试通过。" required></textarea></label>
+          <label class="wide"><span>Git 源仓库</span><input name="workspace" placeholder="/absolute/path/to/repository" required><small>只读取 clean baseline；实际修改发生在独立 worktree。</small></label>
+          <label><span>最大尝试次数</span><input name="maxAttempts" type="number" min="1" value="3" required></label>
+          <label><span>验证命令</span><input name="command" placeholder="pytest -q" required></label>
+          <label class="wide"><span>允许修改的文件</span><input name="allowed" placeholder="src/parser.py, tests/test_parser.py" required><small>超出范围的修改不会被自动晋级。</small></label>
+          <div class="form-note"><strong>启动后会发生什么？</strong><span>创建 durable workflow → 创建 Git worktree → DSH 执行 → 独立命令验证 → HITL 或版本晋级。</span></div>
+          <button class="primary" type="submit">启动工作流</button>
+        </form>
+      </section>
+    </main>
+  </div>
+  <div id="notice" role="status"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

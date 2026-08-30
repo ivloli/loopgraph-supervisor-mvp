@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+supervisor.db
+supervisor.db-shm
+supervisor.db-wal
+.dsh-sessions*/
+.DS_Store
+node_modules/
+ds.apikey

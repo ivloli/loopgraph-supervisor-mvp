@@ -1,0 +1,10 @@
+# Reviewed Builder overlay for future isolated-profile E2E.
+# This patch narrows mutation to the Builder workspace, but rc.2 still permits
+# reads outside that workspace and does not provide network/process isolation.
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+    workspaceRoot: .
+- id: approval
+  config:
+    policy: never

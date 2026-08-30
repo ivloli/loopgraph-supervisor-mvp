@@ -1,0 +1,11 @@
+{
+  "canary_pass_rate": 1.0,
+  "candidate_id": "candidate-v2-real",
+  "document_sha256": "04370c29173369fb315fd90fe345fcbe2d64d0eb2a3f16cc5f8c0c303d2b5e17",
+  "kind": "loopspec",
+  "promotion_attempted": false,
+  "regression_count": 0,
+  "schema_version": 1,
+  "status": "PROMOTION_REVIEW",
+  "validation_pass_rate": 1.0
+}

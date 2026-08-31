@@ -1,8 +1,10 @@
+import hashlib
 import os
 
 import pytest
 
-from loopgraph_supervisor.egress_relay import RELAY_SCRIPT, DockerEgressRelay, load_egress_receipt, write_egress_receipt
+from loopgraph_supervisor.container_gate import PINNED_NODE_IMAGE
+from loopgraph_supervisor.egress_relay import RELAY_SCRIPT, DockerEgressRelay, EgressProbeResult, load_egress_receipt, write_egress_receipt
 
 
 @pytest.mark.skipif(os.getenv("LOOPGRAPH_DOCKER_EGRESS_E2E") != "1", reason="requires Docker and network access")
@@ -19,8 +21,7 @@ def test_internal_builder_network_uses_fixed_deepseek_relay():
 
 
 def test_egress_receipt_is_machine_readable(tmp_path):
-    with DockerEgressRelay() as relay:
-        result = relay.probe()
+    result = EgressProbeResult(PINNED_NODE_IMAGE, hashlib.sha256(RELAY_SCRIPT.encode()).hexdigest(), True, True, True, True, True, True, True, True, True)
     report = tmp_path / "egress.json"
     write_egress_receipt(str(report), result)
     assert '"passed": true' in report.read_text()

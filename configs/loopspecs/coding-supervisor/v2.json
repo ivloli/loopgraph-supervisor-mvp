@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "spec_id": "coding-supervisor",
+  "revision": 2,
+  "predecessor_hash": "e8f54e97c99f452018c7d090caf8217e3657fb3003b93a638a0452227e72bc59",
+  "entrypoint": "execute",
+  "max_iterations": 3,
+  "nodes": [
+    {"id": "execute", "kind": "dsh_execute", "role": "execute"},
+    {"id": "verify", "kind": "verifier", "role": "verify"},
+    {"id": "hitl", "kind": "human_gate", "role": "human_gate"},
+    {"id": "promote", "kind": "promotion", "role": "promote"},
+    {"id": "complete", "kind": "terminal", "role": "complete"},
+    {"id": "failed", "kind": "terminal", "role": "failed"}
+  ],
+  "edges": [
+    {"source": "execute", "target": "verify", "outcomes": ["pass"]},
+    {"source": "execute", "target": "hitl", "outcomes": ["fail"]},
+    {"source": "execute", "target": "hitl", "outcomes": ["exhausted"]},
+    {"source": "verify", "target": "execute", "outcomes": ["fail", "retry"]},
+    {"source": "verify", "target": "hitl", "outcomes": ["approve"]},
+    {"source": "verify", "target": "promote", "outcomes": ["auto_promote"]},
+    {"source": "verify", "target": "hitl", "outcomes": ["exhausted"]},
+    {"source": "hitl", "target": "promote", "outcomes": ["approve"]},
+    {"source": "hitl", "target": "execute", "outcomes": ["retry"]},
+    {"source": "hitl", "target": "failed", "outcomes": ["reject"]},
+    {"source": "promote", "target": "complete", "outcomes": ["pass"]}
+  ]
+}

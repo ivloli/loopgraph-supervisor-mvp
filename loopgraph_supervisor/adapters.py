@@ -4,6 +4,7 @@ from typing import Any
 
 from .domain import AgentInput, AgentOutput, Verification
 from .quality_gate import run_quality_gates
+from .runtime_facts import summarize_dsh_run
 
 
 class DeepSeekHarnessAgent:
@@ -13,7 +14,7 @@ class DeepSeekHarnessAgent:
         self.workspace = workspace
         self.session_root = session_root
         self.cordis = cordis
-        self.model = model or os.getenv("DSH_MODEL", "deepseek-v4-flash")
+        self.model: str = model or os.getenv("DSH_MODEL") or "deepseek-v4-flash"
 
     def execute(self, request: AgentInput) -> AgentOutput:
         from deepseek_harness import DeepSeekHarness  # type: ignore[import-untyped]
@@ -35,7 +36,8 @@ class DeepSeekHarnessAgent:
         response = result.final_response or ""
         if not response.strip():
             raise RuntimeError("DeepSeek Harness returned an empty final response; refusing synthetic success")
-        return AgentOutput({"response": response}, response, session_id)
+        runtime = summarize_dsh_run(result, model=self.model, workspace=workspace, expected_session_id=session_id)
+        return AgentOutput({"response": response, "runtime": runtime}, response, session_id)
 
 
 class CommandVerifier:

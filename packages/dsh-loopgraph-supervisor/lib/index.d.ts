@@ -10,6 +10,7 @@ export interface Config {
     maxAttempts: number;
     requirePromotionApproval: boolean;
     workflowName?: string;
+    loopSpecPath?: string;
 }
 export declare const Config: Schema<Config>;
 export declare function specRevision(goal: string, maxAttempts: number, acceptance: AcceptanceContract): string;

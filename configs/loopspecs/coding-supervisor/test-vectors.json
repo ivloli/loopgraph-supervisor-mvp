@@ -1,0 +1,12 @@
+[
+  {"source_role": "execute", "outcome": "pass", "iteration": 0, "expected_role": "verify"},
+  {"source_role": "execute", "outcome": "fail", "iteration": 0, "expected_role": "execute"},
+  {"source_role": "execute", "outcome": "exhausted", "iteration": 2, "expected_role": "human_gate"},
+  {"source_role": "verify", "outcome": "retry", "iteration": 1, "expected_role": "execute"},
+  {"source_role": "verify", "outcome": "fail", "iteration": 1, "expected_role": "execute"},
+  {"source_role": "verify", "outcome": "approve", "iteration": 1, "expected_role": "human_gate"},
+  {"source_role": "verify", "outcome": "exhausted", "iteration": 2, "expected_role": "human_gate"},
+  {"source_role": "human_gate", "outcome": "approve", "iteration": 2, "expected_role": "promote"},
+  {"source_role": "human_gate", "outcome": "reject", "iteration": 2, "expected_role": "failed"},
+  {"source_role": "promote", "outcome": "pass", "iteration": 2, "expected_role": "complete"}
+]

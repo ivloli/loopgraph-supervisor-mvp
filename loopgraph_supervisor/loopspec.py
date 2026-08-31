@@ -35,8 +35,12 @@ class LoopSpec:
     predecessor_hash: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.spec_id or self.revision < 1 or self.max_iterations < 1:
+        if not self.spec_id or not isinstance(self.revision, int) or isinstance(self.revision, bool) or self.revision < 1 or not isinstance(self.max_iterations, int) or isinstance(self.max_iterations, bool) or self.max_iterations < 1:
             raise ValueError("LoopSpec requires a non-empty id, positive revision, and max_iterations")
+        valid_kinds = {"dsh_execute", "verifier", "human_gate", "promotion", "terminal"}
+        valid_outcomes = {"pass", "fail", "retry", "approve", "auto_promote", "reject", "exhausted"}
+        if any(node.kind not in valid_kinds for node in self.nodes) or any(outcome not in valid_outcomes for edge in self.edges for outcome in edge.outcomes):
+            raise ValueError("LoopSpec contains an unsupported node kind or outcome")
         node_ids = [node.id for node in self.nodes]
         if len(node_ids) != len(set(node_ids)):
             raise ValueError("LoopSpec node ids must be unique")
@@ -79,6 +83,12 @@ def load_loopspec(path: str | Path) -> LoopSpec:
     document = json.loads(Path(path).read_text())
     if not isinstance(document, dict):
         raise ValueError("LoopSpec artifact must contain one JSON object")
+    if set(document) != {"schema_version", "spec_id", "revision", "predecessor_hash", "entrypoint", "max_iterations", "nodes", "edges"}:
+        raise ValueError("LoopSpec artifact has an unexpected shape")
+    if document.get("schema_version") != 1:
+        raise ValueError("unsupported LoopSpec schema version")
+    if any(set(item) - {"id", "kind", "role"} for item in document["nodes"]) or any(set(item) - {"source", "target", "outcomes"} for item in document["edges"]):
+        raise ValueError("LoopSpec nodes or edges contain unknown fields")
     spec = LoopSpec(
         spec_id=document["spec_id"],
         revision=document["revision"],

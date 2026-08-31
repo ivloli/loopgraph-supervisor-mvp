@@ -1,4 +1,5 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { loadLoopSpec, loopSpecHash, nodeForRole } from './loopspec.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, truncateSync, unlinkSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -277,8 +278,8 @@ function fsyncDirectory(path: string): void {
   }
 }
 
-export function initialState(workflowId: string, goal: string, maxAttempts: number, acceptance: LoopState['acceptance']): LoopState {
-  return { workflowId, status: 'IDLE', node: 'EXECUTE', attempt: 0, maxAttempts, goal, acceptance, decisions: [] }
+export function initialState(workflowId: string, goal: string, maxAttempts: number, acceptance: LoopState['acceptance'], loopSpec = loadLoopSpec()): LoopState {
+  return { workflowId, status: 'IDLE', node: loopSpec.entrypoint, attempt: 0, maxAttempts, goal, acceptance, decisions: [], loopSpec, loopSpecHash: loopSpecHash(loopSpec) }
 }
 
 export function foldState(agent: Agent, fallback?: LoopState): LoopState | undefined {
@@ -288,6 +289,15 @@ export function foldState(agent: Agent, fallback?: LoopState): LoopState | undef
       state = state ? { ...state, ...payload.state } : payload.state as LoopState
     }
     if (payload.kind === 'decision' && state && payload.decision) state = { ...state, decisions: [...state.decisions, payload.decision] }
+  }
+  if (state && !(state as Partial<LoopState>).loopSpec) {
+    const loopSpec = loadLoopSpec()
+    state = { ...state, loopSpec, loopSpecHash: loopSpecHash(loopSpec) }
+  }
+  if (state) {
+    const legacyRoles: Record<string, string> = { EXECUTE: 'execute', VERIFY: 'verify', HITL: 'human_gate', PROMOTE: 'promote', COMPLETED: 'complete', FAILED: 'failed' }
+    const role = legacyRoles[state.node]
+    if (role) state = { ...state, node: nodeForRole(state.loopSpec, role) }
   }
   return state
 }

@@ -1,3 +1,4 @@
+import { loadLoopSpec, loopSpecHash, nodeForRole } from './loopspec.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, truncateSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -305,8 +306,8 @@ function fsyncDirectory(path) {
         closeSync(descriptor);
     }
 }
-export function initialState(workflowId, goal, maxAttempts, acceptance) {
-    return { workflowId, status: 'IDLE', node: 'EXECUTE', attempt: 0, maxAttempts, goal, acceptance, decisions: [] };
+export function initialState(workflowId, goal, maxAttempts, acceptance, loopSpec = loadLoopSpec()) {
+    return { workflowId, status: 'IDLE', node: loopSpec.entrypoint, attempt: 0, maxAttempts, goal, acceptance, decisions: [], loopSpec, loopSpecHash: loopSpecHash(loopSpec) };
 }
 export function foldState(agent, fallback) {
     let state = fallback;
@@ -316,6 +317,16 @@ export function foldState(agent, fallback) {
         }
         if (payload.kind === 'decision' && state && payload.decision)
             state = { ...state, decisions: [...state.decisions, payload.decision] };
+    }
+    if (state && !state.loopSpec) {
+        const loopSpec = loadLoopSpec();
+        state = { ...state, loopSpec, loopSpecHash: loopSpecHash(loopSpec) };
+    }
+    if (state) {
+        const legacyRoles = { EXECUTE: 'execute', VERIFY: 'verify', HITL: 'human_gate', PROMOTE: 'promote', COMPLETED: 'complete', FAILED: 'failed' };
+        const role = legacyRoles[state.node];
+        if (role)
+            state = { ...state, node: nodeForRole(state.loopSpec, role) };
     }
     return state;
 }

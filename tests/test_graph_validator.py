@@ -40,5 +40,5 @@ def test_coding_profile_requires_governance_nodes():
         LoopEdge("promote", "complete", ("pass",)),
     )
     spec = LoopSpec("coding-supervisor", 1, "execute", nodes, edges, 3)
-    with pytest.raises(ValueError, match="required node kinds"):
+    with pytest.raises(ValueError, match="required outcomes|required node kinds"):
         validate_loopgraph(spec, require_coding_supervisor=True)

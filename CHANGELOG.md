@@ -26,6 +26,8 @@ All notable architectural and behavioral changes are recorded here. Dates descri
 - Community Plugin Hub candidates were source-audited against the rc.2 and LoopGraph contracts; worktree, auto-review, and permission-rule candidates remain uninstalled because their current lifecycle, peer, or audit semantics do not satisfy the promotion boundary.
 - Promotion requests now bind the reviewed attempt and spec revision to a content fingerprint; post-Gate candidate changes invalidate approval.
 - Python dependency locking with an exact DSH SDK pin, Ruff, mypy, installable console entry points, and GitHub Actions CI.
+- A DSH runtime-fact projection for session, event, notification, tool activity, finish reason, event-stream hash, and workspace changes without persisting event payloads.
+- B versioned LoopSpec loader/interpreter/validator, shared A/B transition vectors, durable active spec state, and native `/loop evolve` candidate generation with predecessor-bound HITL activation.
 
 ### Changed
 

@@ -1,5 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { createHash } from 'node:crypto'
+import { existsSync, lstatSync, realpathSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import '@deepseek-ai/dsh-agent'
 import '@deepseek-ai/dsh-commands'
 import '@deepseek-ai/dsh-user-questions'
@@ -10,6 +12,8 @@ import Schema from '@deepseek-ai/schemastery'
 import { acquireWorkspaceLock, archiveReports, gitCandidateFingerprint, gitChangedFiles, gitHead, gitRollback, prepareGitCandidate, promotePreparedCandidate, rejectCandidate, releaseWorkspaceLock } from './git.js'
 import { verifyCommands } from './verifier.js'
 import { appendLoopEvent, decision, foldState, initialState, loadLoopEvents, withLoopOperationLock } from './ledger.js'
+import { loadLoopSpec, loadWorkspaceLoopSpec, loopSpecHash, nextNode, nodeForRole, saveWorkspaceLoopSpec } from './loopspec.js'
+import type { LoopSpec, Outcome } from './loopspec.js'
 import type { AcceptanceContract, LoopState } from './model.js'
 
 export const name = 'dsh-loopgraph-supervisor'
@@ -19,15 +23,34 @@ export interface Config {
   maxAttempts: number
   requirePromotionApproval: boolean
   workflowName?: string
+  loopSpecPath?: string
 }
 
 export const Config: Schema<Config> = Schema.object({
   maxAttempts: Schema.number().min(1).default(3),
   requirePromotionApproval: Schema.boolean().default(true),
   workflowName: Schema.string(),
+  loopSpecPath: Schema.string(),
 })
 
 const states = new WeakMap<Agent, LoopState>()
+
+function roleNode(state: LoopState, role: string): string {
+  return nodeForRole(state.loopSpec, role)
+}
+
+function route(state: LoopState, outcome: Outcome, source = state.node): string {
+  return nextNode(state.loopSpec, source, outcome, Math.max(0, state.attempt - 1))
+}
+
+function assertCandidateFile(cwd: string, path: string): void {
+  if (!existsSync(path)) throw new Error('LoopSpec candidate file does not exist')
+  const metadata = lstatSync(path)
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error('LoopSpec candidate must be a regular non-symlink file')
+  const workspace = realpathSync(cwd)
+  const candidate = realpathSync(path)
+  if (relative(workspace, candidate).startsWith('..')) throw new Error('LoopSpec candidate real path escapes the Git workspace')
+}
 
 function getState(agent: Agent): LoopState | undefined {
   return foldState(agent, states.get(agent))
@@ -52,10 +75,14 @@ function transition(agent: Agent, state: LoopState, next: Partial<LoopState>, re
   return nextState
 }
 
-function promotedFields(state: LoopState, sha: string): Partial<LoopState> {
+function promotedFields(state: LoopState, sha: string, ingress: 'approve' | 'auto_promote'): Partial<LoopState> {
   const id = `version:${state.workflowId}:${state.attempt}`
-  const versions = [...(state.versions ?? []), { id, sha, parentId: state.activeVersion, status: 'PROMOTED' as const }]
-  return { status: 'COMPLETED', node: 'PROMOTE', candidateCommit: sha, activeVersion: id, versions, hitlReason: undefined }
+  const promote = roleNode(state, 'promote')
+  if (route(state, ingress) !== promote) throw new Error(`LoopSpec ${ingress} route does not enter promotion`)
+  const activeSpec = state.candidateLoopSpec ?? state.loopSpec
+  const versions = [...(state.versions ?? []), { id, sha, parentId: state.activeVersion, status: 'PROMOTED' as const, loopSpec: activeSpec }]
+  const activePromote = nodeForRole(activeSpec, 'promote')
+  return { status: 'COMPLETED', node: nextNode(activeSpec, activePromote, 'pass', Math.max(0, state.attempt - 1)), candidateCommit: sha, activeVersion: id, versions, hitlReason: undefined, loopSpec: activeSpec, loopSpecHash: loopSpecHash(activeSpec), candidateLoopSpec: undefined, evolution: undefined }
 }
 
 function canonical(value: unknown): string {
@@ -146,11 +173,11 @@ async function handleAssistantResult(ctx: Context, config: Config, agent: Agent,
   if (marker.status === 'fail') {
     await applyToCurrentExecution(agent, state, state.node, () => {
       if (state.attempt >= state.maxAttempts) {
-        const waiting = transition(agent, state, { status: 'WAITING_HITL', node: 'HITL', hitlReason: 'FAILURE_REVIEW' }, 'DSH reported failure and retry budget is exhausted')
+        const waiting = transition(agent, state, { status: 'WAITING_HITL', node: route(state, 'exhausted'), hitlReason: 'FAILURE_REVIEW' }, 'DSH reported failure and retry budget is exhausted')
         emitDecision(agent, waiting, decision('HITL_REQUIRED', 'Why wait for a human?', 'wait_for_human', [marker.summary, 'retry budget exhausted'], [{ type: 'dsh_result', summary: marker.summary }], 'Further automatic changes may compound the failure', 'Wait for approve, retry, or reject'))
         return
       }
-      const retried = transition(agent, state, { node: 'EXECUTE', attempt: state.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, 'DSH reported a failed result')
+      const retried = transition(agent, state, { node: route(state, 'fail'), attempt: state.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, 'DSH reported a failed result')
       emitDecision(agent, retried, decision('RETRY', 'Why retry?', 'retry', [marker.summary, 'retry budget remains'], [{ type: 'dsh_result', summary: marker.summary }], 'The next DSH turn may modify more files', 'Apply the failure feedback and re-run the task'))
       agent.followup(createUserMessage({ content: [{ type: 'text', text: `${workflowPrompt(retried)}\nPrevious failure feedback: ${marker.summary}` }], source: { kind: 'plugin', plugin: name } }))
     })
@@ -158,50 +185,71 @@ async function handleAssistantResult(ctx: Context, config: Config, agent: Agent,
   }
   let verifying: LoopState | undefined
   const beganVerification = await applyToCurrentExecution(agent, state, state.node, () => {
-    verifying = transition(agent, state, { node: 'VERIFY' }, 'DSH reported a candidate result')
+    const verify = roleNode(state, 'verify')
+    verifying = transition(agent, state, { node: state.node === verify ? verify : route(state, 'pass') }, 'DSH reported a candidate result')
   })
   if (!beganVerification || !verifying) return
   const cwd = agent.session.header.cwd
   if (!cwd) {
-    await applyToCurrentExecution(agent, verifying, 'VERIFY', () => {
-      const waiting = transition(agent, verifying!, { status: 'WAITING_HITL', node: 'HITL', hitlReason: 'QUALITY_REVIEW' }, 'acceptance verification requires a workspace')
+    await applyToCurrentExecution(agent, verifying, roleNode(verifying, 'verify'), () => {
+      const waiting = transition(agent, verifying!, { status: 'WAITING_HITL', node: roleNode(verifying!, 'human_gate'), hitlReason: 'QUALITY_REVIEW' }, 'acceptance verification requires a workspace')
       emitDecision(agent, waiting, decision('HITL_REQUIRED', 'Why require human review?', 'wait_for_human', ['Session has no workspace for acceptance commands'], [], 'No independent command evidence exists', 'Provide a verifiable workspace'))
     })
     return
   }
+  if (verifying.evolution?.kind === 'loopspec') {
+    try {
+      assertCandidateFile(cwd, verifying.evolution.candidatePath)
+      const candidateSpec = loadLoopSpec(verifying.evolution.candidatePath)
+      if (candidateSpec.spec_id !== verifying.loopSpec.spec_id || candidateSpec.revision !== verifying.loopSpec.revision + 1 || candidateSpec.predecessor_hash !== verifying.loopSpecHash) throw new Error('LoopSpec candidate does not bind the active predecessor')
+      let bound: LoopState | undefined
+      const applied = await applyToCurrentExecution(agent, verifying, roleNode(verifying, 'verify'), () => {
+        bound = transition(agent, verifying!, { candidateLoopSpec: candidateSpec }, 'LoopSpec candidate passed schema, graph, and predecessor validation')
+        appendLoopEvent(agent, { workflowId: verifying!.workflowId, kind: 'evidence', evidence: { type: 'loopspec_gate', passed: true, specId: candidateSpec.spec_id, revision: candidateSpec.revision, predecessorHash: candidateSpec.predecessor_hash, candidateHash: loopSpecHash(candidateSpec) } })
+      })
+      if (!applied || !bound) return
+      verifying = bound
+    } catch (error) {
+      await applyToCurrentExecution(agent, verifying, roleNode(verifying, 'verify'), () => {
+        const waiting = transition(agent, verifying!, { status: 'WAITING_HITL', node: route(verifying!, 'exhausted'), hitlReason: 'QUALITY_REVIEW' }, 'LoopSpec candidate failed graph or predecessor validation')
+        emitDecision(agent, waiting, decision('LOOPSPEC_GATE_FAILED', 'Why stop this evolution candidate?', 'wait_for_human', [error instanceof Error ? error.message : String(error)], [], 'An invalid graph cannot become active', 'Reject or request a corrected LoopSpec candidate'))
+      })
+      return
+    }
+  }
   const commands = verifying.acceptance.commands ?? []
-  const commandVerification = await verifyCommands(cwd, commands)
-  const appliedCommands = await applyToCurrentExecution(agent, verifying, 'VERIFY', () => {
+  const commandVerification = verifying.evolution?.kind === 'loopspec' && commands.length === 0 ? { passed: true, evidence: [] } : await verifyCommands(cwd, commands)
+  const appliedCommands = await applyToCurrentExecution(agent, verifying, roleNode(verifying, 'verify'), () => {
     appendLoopEvent(agent, { workflowId: verifying!.workflowId, kind: 'evidence', evidence: { type: 'acceptance_commands', passed: commandVerification.passed, commands: commandVerification.evidence } })
     if (!commandVerification.passed) {
       const summary = commands.length === 0 ? 'No acceptance commands were configured' : 'At least one acceptance command failed'
       if (verifying!.attempt >= verifying!.maxAttempts) {
-        const waiting = transition(agent, verifying!, { status: 'WAITING_HITL', node: 'HITL', hitlReason: 'QUALITY_REVIEW' }, summary)
+        const waiting = transition(agent, verifying!, { status: 'WAITING_HITL', node: route(verifying!, 'exhausted'), hitlReason: 'QUALITY_REVIEW' }, summary)
         emitDecision(agent, waiting, decision('HITL_REQUIRED', 'Why require human review?', 'wait_for_human', [summary], [{ type: 'acceptance_commands', commands: commandVerification.evidence }], 'Promotion without independent command evidence would be synthetic success', 'Review or correct the acceptance contract'))
         return
       }
-      const retry = transition(agent, verifying!, { node: 'EXECUTE', attempt: verifying!.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, summary)
+      const retry = transition(agent, verifying!, { node: route(verifying!, 'retry'), attempt: verifying!.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, summary)
       emitDecision(agent, retry, decision('RETRY', 'Why retry after command verification?', 'retry', [summary], [{ type: 'acceptance_commands', commands: commandVerification.evidence }], 'The next attempt may modify the workspace again', 'Correct the implementation or test environment'))
       agent.followup(createUserMessage({ content: [{ type: 'text', text: `${workflowPrompt(retry)}\nIndependent acceptance evidence:\n${JSON.stringify(commandVerification.evidence)}` }], source: { kind: 'plugin', plugin: name } }))
     }
   })
   if (!appliedCommands || !commandVerification.passed) return
   const gate = await runDoublecheckGate(ctx, agent, signal)
-  const appliedGate = await applyToCurrentExecution(agent, verifying, 'VERIFY', () => {
+  const appliedGate = await applyToCurrentExecution(agent, verifying, roleNode(verifying, 'verify'), () => {
     appendLoopEvent(agent, { workflowId: verifying!.workflowId, kind: 'evidence', evidence: { type: 'doublecheck_gate', passed: gate.passed, output: gate.text.slice(-4000) } })
     if (!gate.passed) {
       if (verifying!.attempt >= verifying!.maxAttempts) {
-        const waiting = transition(agent, verifying!, { status: 'WAITING_HITL', node: 'HITL', hitlReason: 'QUALITY_REVIEW' }, 'doublecheck gate rejected the candidate')
+        const waiting = transition(agent, verifying!, { status: 'WAITING_HITL', node: route(verifying!, 'exhausted'), hitlReason: 'QUALITY_REVIEW' }, 'doublecheck gate rejected the candidate')
         emitDecision(agent, waiting, decision('HITL_REQUIRED', 'Why require human review?', 'wait_for_human', ['dsh-doublecheck gate rejected the delivery'], [{ type: 'doublecheck_gate', output: gate.text }], 'Promotion would bypass the quality gate', 'Wait for human review'))
         return
       }
-      const retry = transition(agent, verifying!, { node: 'EXECUTE', attempt: verifying!.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, 'doublecheck gate rejected the candidate')
+      const retry = transition(agent, verifying!, { node: route(verifying!, 'retry'), attempt: verifying!.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, 'doublecheck gate rejected the candidate')
       emitDecision(agent, retry, decision('RETRY', 'Why retry after the quality gate?', 'retry', ['dsh-doublecheck returned a rework result'], [{ type: 'doublecheck_gate', output: gate.text }], 'The next change may broaden the diff', 'Ask DSH to rework the delivery'))
       agent.followup(createUserMessage({ content: [{ type: 'text', text: `${workflowPrompt(retry)}\nQuality gate feedback:\n${gate.text}` }], source: { kind: 'plugin', plugin: name } }))
     }
   })
   if (!appliedGate || !gate.passed) return
-  const reportsArchived = await applyToCurrentExecution(agent, verifying, 'VERIFY', () => {
+  const reportsArchived = await applyToCurrentExecution(agent, verifying, roleNode(verifying, 'verify'), () => {
     const reports = archiveReports(cwd, ['gate-report.md', 'doublecheck-spec.md', 'doublecheck-report.md'])
     for (const report of reports) appendLoopEvent(agent, { workflowId: verifying!.workflowId, kind: 'evidence', evidence: { type: 'archived_report', path: report.path, content: report.content.slice(-10000), verdict: 'deliverable' } })
   })
@@ -210,17 +258,18 @@ async function handleAssistantResult(ctx: Context, config: Config, agent: Agent,
   const allowed = verifying.acceptance.allowedFiles ?? []
   const scopePassed = allowed.length > 0 && changed.length > 0 && changed.every(file => allowed.includes(file))
   const verified = verifying
-  await applyToCurrentExecution(agent, verified, 'VERIFY', async () => {
+  await applyToCurrentExecution(agent, verified, roleNode(verified, 'verify'), async () => {
     appendLoopEvent(agent, { workflowId: verified.workflowId, kind: 'evidence', evidence: { type: 'git_scope', changedFiles: changed, allowedFiles: allowed, passed: scopePassed } })
     if (!scopePassed) {
-      const waiting = transition(agent, verified, { node: 'HITL', status: 'WAITING_HITL', hitlReason: 'SCOPE_REVIEW' }, 'Git scope is empty, unbounded, or exceeds allowed files')
+      const waiting = transition(agent, verified, { node: route(verified, 'approve'), status: 'WAITING_HITL', hitlReason: 'SCOPE_REVIEW' }, 'Git scope is empty, unbounded, or exceeds allowed files')
       emitDecision(agent, waiting, decision('HITL_REQUIRED', 'Why require human review?', 'wait_for_human', ['Git scope did not satisfy the explicit allowed-file contract'], [{ type: 'git_scope', changedFiles: changed, allowedFiles: allowed }], 'Promotion could include unrelated or unverifiable changes', 'Review the diff manually'))
       return
     }
+    if (verified.evolution?.kind === 'loopspec') assertCandidateFile(cwd, verified.evolution.candidatePath)
     const prepared = await prepareGitCandidate(cwd, `${config.requirePromotionApproval ? 'loopgraph: human-approved promote' : 'loopgraph: promote'} ${verified.workflowId} attempt ${verified.attempt}`)
     const preparedState = { sha: prepared.sha, tree: prepared.tree, parent: prepared.parent, files: prepared.files }
-    if (config.requirePromotionApproval) {
-      const waiting = transition(agent, verified, { node: 'HITL', status: 'WAITING_HITL', hitlReason: 'PROMOTION_REVIEW', candidateFingerprint: prepared.fingerprint, preparedCandidate: preparedState }, 'verified candidate requires human promotion approval')
+    if (config.requirePromotionApproval || verified.evolution?.kind === 'loopspec') {
+      const waiting = transition(agent, verified, { node: route(verified, 'approve'), status: 'WAITING_HITL', hitlReason: 'PROMOTION_REVIEW', candidateFingerprint: prepared.fingerprint, preparedCandidate: preparedState }, 'verified candidate requires human promotion approval')
       emitDecision(agent, waiting, decision('PROMOTION_REVIEW_REQUIRED', 'Why pause before Git commit?', 'wait_for_human', ['Acceptance commands passed', 'dsh-doublecheck gate passed', 'Git scope passed', 'Human review is required by policy'], [{ type: 'git_scope', changedFiles: changed, allowedFiles: allowed }, { type: 'acceptance_commands', commands: commandVerification.evidence }, { type: 'approval_binding', attempt: verified.attempt, specRevision: verified.specRevision, candidateFingerprint: prepared.fingerprint, candidateCommit: prepared.sha }], 'The human must inspect AI-authored changes before they become a version', 'Approve only this spec revision and immutable candidate snapshot'))
       return
     }
@@ -228,7 +277,7 @@ async function handleAssistantResult(ctx: Context, config: Config, agent: Agent,
     const sha = await promotePreparedCandidate(cwd, prepared, `loopgraph-${verified.workflowId}-${verified.attempt}`)
     let promoted: LoopState = { ...verified, candidateCommit: sha }
     appendLoopEvent(agent, { workflowId: promoted.workflowId, kind: 'evidence', evidence: { type: 'git_candidate', sha, files: prepared.files } })
-    promoted = transition(agent, promoted, promotedFields(promoted, sha), 'verification and Git evidence passed')
+    promoted = transition(agent, promoted, promotedFields(promoted, sha, 'auto_promote'), 'verification and Git evidence passed')
     emitDecision(agent, promoted, decision('PROMOTE', 'Why promote this candidate?', 'promote', ['DSH result passed', 'dsh-doublecheck gate passed', 'Git scope passed'], [{ type: 'candidate_commit', sha: promoted.candidateCommit ?? '' }], 'Promotion makes the candidate active', 'Mark the candidate as the active workflow version'))
     settleTodos(agent, true)
     await releaseWorkspaceLock(cwd, promoted.workflowId)
@@ -259,6 +308,7 @@ function loopLogs(agent: Agent, limit = 20): unknown[] {
 }
 
 export function apply(ctx: Context, config: Config): void {
+  const activeLoopSpec: LoopSpec = loadLoopSpec(config.loopSpecPath || undefined)
   const recover = async (agent: Agent, current: LoopState, action: string, signal = new AbortController().signal): Promise<CommandResult> => {
     const cwd = agent.session.header.cwd
     if (!cwd || !current.baselineCommit) return { kind: 'error', text: 'recovery requires a Git workspace and baseline commit' }
@@ -267,7 +317,7 @@ export function apply(ctx: Context, config: Config): void {
       await withLoopOperationLock(agent, async () => {
         const state = getState(agent)
         if (!state || state.status !== 'UNCERTAIN') return
-        const verifying = transition(agent, state, { status: 'RUNNING', node: 'VERIFY', hitlReason: undefined }, 'human chose to verify the uncertain workspace without re-running DSH')
+        const verifying = transition(agent, state, { status: 'RUNNING', node: roleNode(state, 'verify'), hitlReason: undefined }, 'human chose to verify the uncertain workspace without re-running DSH')
         running = emitDecision(agent, verifying, decision('UNCERTAIN_VERIFY', 'Why verify the existing workspace?', 'verify_existing', ['A human chose independent verification over automatic retry'], [], 'The workspace may contain a partial candidate', 'Run acceptance, Gate, and Git scope against the existing files'))
       })
       if (!running) return { kind: 'error', text: 'recover requires UNCERTAIN status' }
@@ -276,7 +326,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     if (current.status !== 'UNCERTAIN') return { kind: 'error', text: 'recover requires UNCERTAIN status' }
     if (action === 'retry-same-attempt') {
-      const running = transition(agent, current, { status: 'RUNNING', node: 'EXECUTE', hitlReason: undefined }, 'human accepted possible duplicate effects and requested same-attempt retry')
+      const running = transition(agent, current, { status: 'RUNNING', node: roleNode(current, 'execute'), hitlReason: undefined }, 'human accepted possible duplicate effects and requested same-attempt retry')
       emitDecision(agent, running, decision('UNCERTAIN_RETRY', 'Why retry this uncertain attempt?', 'retry_same_attempt', ['A human explicitly accepted possible duplicate external effects'], [], 'The DSH turn may repeat file or tool side effects', 'Re-run the same workflow attempt with its original contract'))
       agent.followup(createUserMessage({ content: [{ type: 'text', text: `${workflowPrompt(running)}\nThis is an explicitly approved retry of an uncertain attempt. Inspect the existing workspace before changing anything.` }], source: { kind: 'plugin', plugin: name } }))
       return { kind: 'success', text: 'uncertain attempt retry queued' }
@@ -284,13 +334,13 @@ export function apply(ctx: Context, config: Config): void {
     if (action === 'restore-baseline') {
       const cleanup = await rejectCandidate(cwd, current.baselineCommit, current.acceptance.allowedFiles ?? [], ['gate-report.md', 'doublecheck-spec.md', 'doublecheck-report.md'])
       for (const report of cleanup.removedReports) appendLoopEvent(agent, { workflowId: current.workflowId, kind: 'evidence', evidence: { type: 'archived_report', path: report.path, content: report.content.slice(-10000) } })
-      const failed = transition(agent, current, { status: 'FAILED', node: 'FAILED', hitlReason: undefined }, 'human restored the uncertain workspace baseline')
+      const failed = transition(agent, current, { status: 'FAILED', node: roleNode(current, 'failed'), hitlReason: undefined }, 'human restored the uncertain workspace baseline')
       emitDecision(agent, failed, decision('UNCERTAIN_RESTORE', 'Why restore the baseline?', 'restore_baseline', ['A human chose to discard uncertain effects'], [{ type: 'cleanup', restoredFiles: cleanup.restoredFiles }], 'The uncertain candidate is discarded', 'Return the workspace to the recorded baseline'))
       await releaseWorkspaceLock(cwd, current.workflowId)
       return { kind: 'success', text: `restored baseline; files: ${cleanup.restoredFiles.join(', ') || 'none'}` }
     }
     if (action === 'abort-preserve') {
-      const failed = transition(agent, current, { status: 'FAILED', node: 'FAILED', hitlReason: undefined }, 'human aborted while preserving the uncertain workspace')
+      const failed = transition(agent, current, { status: 'FAILED', node: roleNode(current, 'failed'), hitlReason: undefined }, 'human aborted while preserving the uncertain workspace')
       emitDecision(agent, failed, decision('UNCERTAIN_ABORT', 'Why preserve the workspace?', 'abort_preserve', ['A human requested forensic preservation'], [{ type: 'workspace', cwd }], 'The workspace remains dirty and requires manual handling', 'Stop automatic execution without hiding possible effects'))
       await releaseWorkspaceLock(cwd, current.workflowId)
       return { kind: 'success', text: 'aborted; uncertain workspace preserved' }
@@ -315,9 +365,13 @@ export function apply(ctx: Context, config: Config): void {
       const restored = foldState(agent)
       if (!restored) return
       if (restored.status === 'RUNNING') {
-        const waiting = transition(agent, restored, { status: 'UNCERTAIN', node: 'HITL', hitlReason: 'UNCERTAIN_RECOVERY' }, 'DSH restarted before the workflow result was durably settled')
+        const waiting = transition(agent, restored, { status: 'UNCERTAIN', node: roleNode(restored, 'human_gate'), hitlReason: 'UNCERTAIN_RECOVERY' }, 'DSH restarted before the workflow result was durably settled')
         uncertain = emitDecision(agent, waiting, decision('UNCERTAIN', 'Why stop automatic recovery?', 'wait_for_human', ['A recovered RUNNING workflow may already have external side effects'], [], 'Automatic retry could duplicate file or tool effects', 'Ask a human to verify, retry, restore, or abort'))
-      } else states.set(agent, restored)
+      } else {
+        states.set(agent, restored)
+        const cwd = agent.session.header.cwd
+        if (cwd && restored.status === 'COMPLETED') saveWorkspaceLoopSpec(cwd, restored.loopSpec)
+      }
     })
     if (uncertain) void promptRecovery(agent, uncertain)
   })
@@ -338,14 +392,14 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.on('agent/turn-stopping', async ({ agent, signal }) => {
     const state = getState(agent)
-    if (!state || state.status !== 'RUNNING' || state.node !== 'EXECUTE') return
+    if (!state || state.status !== 'RUNNING' || state.node !== roleNode(state, 'execute')) return
     await handleAssistantResult(ctx, config, agent, state, lastAssistantText(agent), signal)
   })
 
   ctx.commands.register({
     name: 'loop',
-    description: 'Start, inspect, pause, resume, approve, reject, or explain a LoopGraph workflow.',
-    input: { hint: 'start <goal> | status | logs | pause | resume | retry [feedback] | recover | approve [comment] | reject | explain' },
+    description: 'Start, evolve, inspect, pause, resume, approve, reject, or explain a LoopGraph workflow.',
+    input: { hint: 'start <goal> | evolve <feedback> | status | logs | pause | resume | retry [feedback] | recover | approve [comment] | reject | explain' },
     recordInput: false,
     handler: async ({ agent, rawInput, signal }): Promise<CommandResult> => {
       if (signal.aborted) return { kind: 'error', text: 'loop command aborted' }
@@ -367,16 +421,53 @@ export function apply(ctx: Context, config: Config): void {
           try { baseline = await gitHead(cwd) } catch (error) { return { kind: 'error', text: error instanceof Error ? error.message : String(error) } }
           const workflowId = `dsh-${agent.id}-${Date.now().toString(36)}`
           const baselineVersion = `version:${workflowId}:baseline`
-          const state = { ...initialState(workflowId, input.goal, input.maxAttempts, input.acceptance), specRevision: specRevision(input.goal, input.maxAttempts, input.acceptance), baselineCommit: baseline, activeVersion: baselineVersion, versions: [{ id: baselineVersion, sha: baseline, status: 'BASELINE' as const }] }
+          const workflowSpec = loadWorkspaceLoopSpec(cwd, active?.loopSpec ?? activeLoopSpec)
+          if (input.maxAttempts > workflowSpec.max_iterations) return { kind: 'error', text: `maxAttempts ${input.maxAttempts} exceeds active LoopSpec limit ${workflowSpec.max_iterations}` }
+          const state = { ...initialState(workflowId, input.goal, input.maxAttempts, input.acceptance, workflowSpec), specRevision: specRevision(input.goal, input.maxAttempts, input.acceptance), baselineCommit: baseline, activeVersion: baselineVersion, versions: [{ id: baselineVersion, sha: baseline, status: 'BASELINE' as const, loopSpec: workflowSpec }] }
           const existingChanges = await gitChangedFiles(cwd)
           if (existingChanges.length > 0) return { kind: 'error', text: `loop start requires a clean Git workspace; found: ${existingChanges.join(', ')}` }
           try { await acquireWorkspaceLock(cwd, workflowId) } catch (error) { return { kind: 'error', text: error instanceof Error ? error.message : String(error) } }
           setState(agent, state)
           appendLoopEvent(agent, { workflowId: state.workflowId, kind: 'state', state })
           const planned = emitDecision(agent, state, decision('PLAN', 'Why start this workflow?', 'start', ['Human explicitly requested /loop start'], [], 'DSH may modify the workspace', 'Create a durable DSH-native workflow state'))
-          const running = transition(agent, { ...planned, status: 'RUNNING' }, { status: 'RUNNING', node: 'EXECUTE', attempt: 1 }, 'workflow started')
+          const running = transition(agent, { ...planned, status: 'RUNNING' }, { status: 'RUNNING', node: workflowSpec.entrypoint, attempt: 1 }, 'workflow started')
           running && agent.followup(createUserMessage({ content: [{ type: 'text', text: workflowPrompt(running) }], source: { kind: 'plugin', plugin: name } }))
           return { kind: 'success', text: `started ${running.workflowId} attempt ${running.attempt}` }
+        })
+      }
+      if (action === 'evolve') {
+        if (!actionInput) return { kind: 'error', text: 'usage: /loop evolve <LoopSpec improvement request>' }
+        if (!config.loopSpecPath) return { kind: 'error', text: 'evolve requires configured loopSpecPath' }
+        return withLoopOperationLock(agent, async () => {
+          const active = getState(agent)
+          if (active && ['RUNNING', 'UNCERTAIN', 'PAUSED', 'WAITING_HITL'].includes(active.status)) return { kind: 'error', text: `workflow ${active.workflowId} is still ${active.status}` }
+          const cwd = agent.session.header.cwd
+          if (!cwd) return { kind: 'error', text: 'loop evolve requires a Git workspace' }
+          const activeSpec = loadWorkspaceLoopSpec(cwd, active?.loopSpec ?? activeLoopSpec)
+          if (config.maxAttempts > activeSpec.max_iterations) return { kind: 'error', text: `maxAttempts ${config.maxAttempts} exceeds active LoopSpec limit ${activeSpec.max_iterations}` }
+          const activePath = resolve(config.loopSpecPath!)
+          const candidatePath = join(dirname(activePath), `v${activeSpec.revision + 1}.json`)
+          const candidateRelative = relative(cwd, candidatePath)
+          if (!candidateRelative || candidateRelative.startsWith('..') || isAbsolute(candidateRelative)) return { kind: 'error', text: 'LoopSpec candidate path must be inside the Git workspace' }
+          const realWorkspace = realpathSync(cwd)
+          const realParent = realpathSync(dirname(candidatePath))
+          if (relative(realWorkspace, realParent).startsWith('..')) return { kind: 'error', text: 'LoopSpec candidate real path escapes the Git workspace' }
+          if (existsSync(candidatePath) && lstatSync(candidatePath).isSymbolicLink()) return { kind: 'error', text: 'LoopSpec candidate path cannot be a symlink' }
+          const existingChanges = await gitChangedFiles(cwd)
+          if (existingChanges.length > 0) return { kind: 'error', text: `loop evolve requires a clean Git workspace; found: ${existingChanges.join(', ')}` }
+          const baseline = await gitHead(cwd)
+          const workflowId = `evolve-${agent.id}-${Date.now().toString(36)}`
+          const goal = `Propose a bounded LoopSpec revision for this request: ${actionInput}. Write exactly one candidate artifact to ${candidateRelative}. Preserve spec_id, set revision to ${activeSpec.revision + 1}, and set predecessor_hash to ${loopSpecHash(activeSpec)}. Do not edit the active LoopSpec.`
+          const acceptance = { commands: [], allowedFiles: [candidateRelative] }
+          const baselineVersion = `version:${workflowId}:baseline`
+          const state = { ...initialState(workflowId, goal, config.maxAttempts, acceptance, activeSpec), specRevision: specRevision(goal, config.maxAttempts, acceptance), baselineCommit: baseline, activeVersion: baselineVersion, versions: [{ id: baselineVersion, sha: baseline, status: 'BASELINE' as const, loopSpec: activeSpec }], evolution: { kind: 'loopspec' as const, candidatePath, predecessorHash: loopSpecHash(activeSpec) } }
+          try { await acquireWorkspaceLock(cwd, workflowId) } catch (error) { return { kind: 'error', text: error instanceof Error ? error.message : String(error) } }
+          setState(agent, state)
+          appendLoopEvent(agent, { workflowId, kind: 'state', state })
+          const planned = emitDecision(agent, state, decision('EVOLUTION_REQUESTED', 'Why evolve this LoopSpec?', 'propose_candidate', ['Human explicitly requested /loop evolve', actionInput], [{ type: 'loopspec_baseline', revision: activeSpec.revision, hash: loopSpecHash(activeSpec) }], 'DSH may propose an invalid graph, but cannot write the active pointer', 'Create and independently validate one immutable LoopSpec candidate'))
+          const running = transition(agent, { ...planned, status: 'RUNNING' }, { status: 'RUNNING', node: activeSpec.entrypoint, attempt: 1 }, 'LoopSpec evolution started')
+          agent.followup(createUserMessage({ content: [{ type: 'text', text: workflowPrompt(running) }], source: { kind: 'plugin', plugin: name } }))
+          return { kind: 'success', text: `started LoopSpec evolution ${workflowId}; candidate ${candidateRelative}` }
         })
       }
       if (!current) return { kind: 'error', text: 'no active loop workflow' }
@@ -417,7 +508,7 @@ export function apply(ctx: Context, config: Config): void {
           const humanFeedback = actionInput
           const gateEvidence = loadLoopEvents(agent).slice().reverse().find(event => event.kind === 'evidence' && event.evidence?.type === 'doublecheck_gate')?.evidence
           const gateFeedback = typeof gateEvidence?.output === 'string' ? gateEvidence.output.slice(-5000) : 'No gate report was recorded.'
-          const retried = transition(agent, state, { status: 'RUNNING', node: 'EXECUTE', attempt: state.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, 'human requested HITL retry')
+          const retried = transition(agent, state, { status: 'RUNNING', node: route(state, 'retry'), attempt: state.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, 'human requested HITL retry')
           appendLoopEvent(agent, { workflowId: retried.workflowId, kind: 'evidence', evidence: { type: 'improvement_proposal', basedOnAttempt: state.attempt, problem: gateFeedback, hypothesis: 'Address the quality gate findings without widening the approved file scope', humanFeedback, expectedEvidence: ['acceptance commands pass', 'doublecheck verdict is deliverable', 'Git scope remains bounded'] } })
           emitDecision(agent, retried, decision('HITL_RETRY', 'Why retry after human review?', 'retry', ['Human explicitly requested another attempt', 'The prior gate supplied actionable rework evidence'], [{ type: 'human_feedback', text: humanFeedback }, { type: 'doublecheck_gate', output: gateFeedback }], 'The next turn may modify the workspace again', 'Apply the improvement proposal and re-run every gate'))
           agent.followup(createUserMessage({ content: [{ type: 'text', text: `${workflowPrompt(retried)}\n\nPrior quality gate report:\n${gateFeedback}\n\nHuman feedback:\n${humanFeedback || 'Resolve every red gate item and preserve the allowed-file scope.'}` }], source: { kind: 'plugin', plugin: name } }))
@@ -438,13 +529,20 @@ export function apply(ctx: Context, config: Config): void {
             if (!state.specRevision || state.specRevision !== specRevision(state.goal, state.maxAttempts, state.acceptance)) return { kind: 'error', text: 'approval spec revision does not match the current workflow contract' }
             if (!state.candidateFingerprint || state.candidateFingerprint !== await gitCandidateFingerprint(cwd)) return { kind: 'error', text: 'candidate changed after review; re-run verification before approval' }
             if (!state.preparedCandidate) return { kind: 'error', text: 'approval has no immutable prepared candidate' }
+            if (state.evolution?.kind === 'loopspec') {
+              if (!state.candidateLoopSpec || state.candidateLoopSpec.revision !== state.loopSpec.revision + 1 || state.candidateLoopSpec.predecessor_hash !== state.loopSpecHash) return { kind: 'error', text: 'approval LoopSpec candidate no longer binds the active predecessor' }
+              assertCandidateFile(cwd, state.evolution.candidatePath)
+              const reparsed = loadLoopSpec(state.evolution.candidatePath)
+              if (loopSpecHash(reparsed) !== loopSpecHash(state.candidateLoopSpec)) return { kind: 'error', text: 'LoopSpec candidate changed after graph validation; re-run every gate' }
+            }
             const candidate = { ...state.preparedCandidate, fingerprint: state.candidateFingerprint }
             const sha = await promotePreparedCandidate(cwd, candidate, `loopgraph-${state.workflowId}-${state.attempt}`)
-            const candidateEvidence = { type: 'git_candidate', sha, files: candidate.files, approvedBy: 'human', ...(humanComment ? { humanComment } : {}) }
+            const candidateEvidence = { type: 'git_candidate', sha, files: candidate.files, approvedBy: 'human', ...(state.candidateLoopSpec ? { loopSpecRevision: state.candidateLoopSpec.revision, loopSpecHash: loopSpecHash(state.candidateLoopSpec), predecessorHash: state.candidateLoopSpec.predecessor_hash } : {}), ...(humanComment ? { humanComment } : {}) }
             appendLoopEvent(agent, { workflowId: state.workflowId, kind: 'evidence', evidence: candidateEvidence })
-            const promoted = transition(agent, state, promotedFields(state, sha), 'human approved verified candidate')
+            const promoted = transition(agent, state, promotedFields(state, sha, 'approve'), 'human approved verified candidate')
+            if (state.candidateLoopSpec) saveWorkspaceLoopSpec(cwd, state.candidateLoopSpec)
             const rationale = ['Human explicitly approved after verification and diff review', ...(humanComment ? [`Human comment: ${humanComment}`] : [])]
-            const evidence = [{ type: 'git_candidate', sha, files: candidate.files }, ...(humanComment ? [{ type: 'human_comment', text: humanComment }] : [])]
+            const evidence = [{ type: 'git_candidate', sha, files: candidate.files }, ...(state.candidateLoopSpec ? [{ type: 'loopspec_activation', revision: state.candidateLoopSpec.revision, hash: loopSpecHash(state.candidateLoopSpec), predecessorHash: state.candidateLoopSpec.predecessor_hash }] : []), ...(humanComment ? [{ type: 'human_comment', text: humanComment }] : [])]
             emitDecision(agent, promoted, decision('HUMAN_APPROVE_PROMOTE', 'Why promote this candidate?', 'promote', rationale, evidence, 'Promotion makes AI-authored changes part of Git history', 'Create the candidate commit and mark the workflow completed'))
             settleTodos(agent, true)
             await releaseWorkspaceLock(cwd, promoted.workflowId)
@@ -463,7 +561,7 @@ export function apply(ctx: Context, config: Config): void {
             const cleanup = await rejectCandidate(cwd, state.baselineCommit, state.acceptance.allowedFiles ?? [], ['gate-report.md', 'doublecheck-spec.md', 'doublecheck-report.md'])
             for (const report of cleanup.removedReports) appendLoopEvent(agent, { workflowId: state.workflowId, kind: 'evidence', evidence: { type: 'archived_report', path: report.path, content: report.content.slice(-10000) } })
             appendLoopEvent(agent, { workflowId: state.workflowId, kind: 'evidence', evidence: { type: 'reject_cleanup', restoredFiles: cleanup.restoredFiles, removedReports: cleanup.removedReports.map(report => report.path), baselineCommit: state.baselineCommit } })
-            const rejected = transition(agent, state, { status: 'FAILED', node: 'FAILED', hitlReason: undefined }, 'human rejection restored the candidate baseline')
+            const rejected = transition(agent, state, { status: 'FAILED', node: route(state, 'reject'), hitlReason: undefined }, 'human rejection restored the candidate baseline')
             emitDecision(agent, rejected, decision('HUMAN_REJECT', 'Why discard this candidate?', 'reject', ['Human rejected the candidate after reviewing gate evidence', 'Candidate files were restored to the recorded baseline'], [{ type: 'reject_cleanup', restoredFiles: cleanup.restoredFiles, archivedReports: cleanup.removedReports.map(report => report.path) }], 'The rejected candidate is no longer present in the workspace', 'Keep audit evidence while returning the workspace to a clean baseline'))
             settleTodos(agent, false)
             await releaseWorkspaceLock(cwd, state.workflowId)
@@ -484,9 +582,11 @@ export function apply(ctx: Context, config: Config): void {
           if (!cwd) return { kind: 'error', text: 'current session has no workspace' }
           try {
             await gitRollback(cwd, target.sha)
+            const targetSpec = target.loopSpec ?? state.loopSpec
             const rollbackId = `version:${state.workflowId}:rollback:${Date.now().toString(36)}`
-            const versions = [...(state.versions ?? []), { id: rollbackId, sha: target.sha, parentId: state.activeVersion, status: 'ROLLED_BACK' as const }]
-            const rolled = transition(agent, state, { status: 'COMPLETED', node: 'PROMOTE', candidateCommit: target.sha, activeVersion: rollbackId, versions }, 'human requested workflow-owned Git rollback')
+            const versions = [...(state.versions ?? []), { id: rollbackId, sha: target.sha, parentId: state.activeVersion, status: 'ROLLED_BACK' as const, loopSpec: targetSpec }]
+            const rolled = transition(agent, state, { status: 'COMPLETED', node: nodeForRole(targetSpec, 'complete'), candidateCommit: target.sha, activeVersion: rollbackId, versions, loopSpec: targetSpec, loopSpecHash: loopSpecHash(targetSpec) }, 'human requested workflow-owned Git rollback')
+            saveWorkspaceLoopSpec(cwd, targetSpec)
             emitDecision(agent, rolled, decision('ROLLBACK', 'Why change the active version?', 'rollback', ['Target version belongs to this workflow', 'Git workspace was clean'], [{ type: 'version', versionId, sha: target.sha }], 'Rollback restores older code behavior', 'Switch the workspace to the requested workflow version'))
             return { kind: 'success', text: `rolled back to ${versionId} (${target.sha})` }
           } catch (error) {

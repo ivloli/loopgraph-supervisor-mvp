@@ -235,7 +235,13 @@ git log -1 --oneline
 /loop rollback <workflow-owned-version-id>
 ```
 
-B 的 `/loop evolve` 当前尚未接入；人工主动 RSI 入口属于 A：
+B 也支持原生 LoopSpec evolution。先在 plugin config 中把 `loopSpecPath` 指向目标仓库当前 active artifact 的绝对路径，然后在 DSH Web session 中执行：
+
+```text
+/loop evolve Review the latest verifier feedback and propose a bounded LoopSpec improvement.
+```
+
+B 会让当前 DSH Agent 只生成下一 revision，之后由 TypeScript Graph Gate、Doublecheck、Git scope 和 HITL 验证。人工批准后，active spec/hash 写入 durable sidecar state。A 的人工入口仍可使用：
 
 ```bash
 uv run loopgraph evolve coding-supervisor \

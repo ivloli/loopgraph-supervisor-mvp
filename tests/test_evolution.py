@@ -81,11 +81,8 @@ def test_regressing_candidate_is_rejected_and_never_activated():
         baseline.max_iterations,
         baseline.content_hash(),
     )
-    service.intake("bad-v2", candidate.document(), "Bad candidate used to prove rejection")
-
-    rejected = service.evaluate("bad-v2")
-
-    assert rejected.status == "REJECTED"
+    with pytest.raises(ValueError, match="missing required outcomes"):
+        service.intake("bad-v2", candidate.document(), "Bad candidate used to prove rejection")
     active = service.specs.active("coding-supervisor")
     assert active is not None
     assert active.revision == 1

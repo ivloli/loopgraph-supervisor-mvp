@@ -64,6 +64,8 @@ Candidate(n)
 
 理由：保持 Harness-neutral；让 fake 测试不需要 API key；让未来替换 Codex/Claude Code 时不修改状态机。
 
+补充：A adapter 必须投影 DSH Agent-runtime facts，而不能只返回 final response。当前保存 session id、finish reason、event/notification type counts、tool activity types、event stream hash 和 workspace changed files；不保存完整 payload，避免把 prompt、工具输出或 secret 复制进 Supervisor audit store。Fake adapter 不生成 `dsh_runtime` evidence。
+
 ### D-003：保留 SQLite
 
 决定：DSH session 日志之外，Supervisor 继续维护自己的 SQLite。
@@ -108,7 +110,7 @@ Candidate(n)
 
 ### D-010：保留 A/B 两种实现边界
 
-决定：A 是 Python 外部 Supervisor，通过官方 SDK 驱动 DSH runtime；B 是运行在 DSH 内部的 TypeScript/Cordis 插件。两者共享领域语义，不共享持久化实现。
+决定：A 是 Python 外部 Supervisor，通过官方 SDK 驱动 DSH runtime；B 是运行在 DSH 内部的 TypeScript/Cordis 插件。两者共享 versioned LoopSpec schema、graph semantics 和 transition vectors，但不共享持久化实现。
 
 理由：A 证明 Harness-neutral 外部控制平面和独立 API；B 证明 DSH-native commands、Agent lifecycle 和社区插件组合。把两者混成一个跨语言运行时会增加故障边界，也无法清楚解释职责。
 
@@ -409,6 +411,8 @@ Supervisor 会把 acceptance contract 写入 `workflow_contracts`，同时传给
 ## 14. Native Plugin B 版本
 
 Python 版 A 保留为完整外部 Supervisor reference。TypeScript 插件 B 位于 `packages/dsh-loopgraph-supervisor`，不是把 Python 代码机械翻译成 TypeScript，而是使用 DSH 原生扩展点：
+
+B 的 ledger、operation lock、Doublecheck、Git scope、HITL 和 recovery 仍由原生 plugin 实现；graph authority 已迁移到与 A 相同的 LoopSpec JSON。B 的 TypeScript loader/interpreter/validator 读取 active spec，`/loop evolve` 让当前 DSH Agent 只生成下一 revision，plugin 验证 predecessor 后才允许进入现有晋级管线。
 
 ```text
 ctx.commands.register('/loop')

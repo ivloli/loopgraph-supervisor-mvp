@@ -4,3 +4,5 @@
       config:
         maxAttempts: 3
         requirePromotionApproval: true
+        # Set this to the absolute Git-managed active LoopSpec path before using /loop evolve.
+        loopSpecPath: ""

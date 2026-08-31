@@ -215,5 +215,8 @@ class SQLiteStore:
         hitl = [dict(row) for row in self.db.execute("SELECT * FROM hitl_requests WHERE workflow_id=? ORDER BY created_at", (workflow_id,))]
         for item in hitl:
             item["context"] = decode(item["context"], {})
-        attempts = [dict(row) for row in self.db.execute("SELECT id,number,execution_token,error,session_id,created_at FROM attempts WHERE workflow_id=? ORDER BY number", (workflow_id,))]
+        attempts = [dict(row) for row in self.db.execute("SELECT id,number,execution_token,error,session_id,output,created_at FROM attempts WHERE workflow_id=? ORDER BY number", (workflow_id,))]
+        for item in attempts:
+            output = decode(item.pop("output"), {})
+            item["runtime"] = output.get("runtime") if isinstance(output, dict) else None
         return {"decisions": decisions, "proposals": proposals, "events": events, "versions": versions, "verifications": verifications, "hitl": hitl, "attempts": attempts}

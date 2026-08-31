@@ -20,6 +20,12 @@ def test_command_verifier_rejects_empty_contract(tmp_path):
     assert result.evidence[0]["type"] == "acceptance_contract"
 
 
+def test_fake_agent_does_not_claim_real_dsh_runtime_evidence():
+    output = FakeAgent().execute(AgentInput("wf-fake", "goal", 1))
+
+    assert "runtime" not in output.artifact
+
+
 def test_sdk_adapter_rejects_empty_response(monkeypatch, tmp_path):
     class Result:
         final_response = ""

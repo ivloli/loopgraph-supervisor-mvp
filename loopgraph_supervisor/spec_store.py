@@ -55,6 +55,8 @@ class LoopSpecStore:
 def from_document(document: dict[str, Any]) -> LoopSpec:
     if document.get("schema_version") != 1:
         raise ValueError("unsupported LoopSpec schema version")
+    if set(document) != {"schema_version", "spec_id", "revision", "predecessor_hash", "entrypoint", "max_iterations", "nodes", "edges"}:
+        raise ValueError("LoopSpec document has an unexpected shape")
     return LoopSpec(
         spec_id=document["spec_id"],
         revision=document["revision"],

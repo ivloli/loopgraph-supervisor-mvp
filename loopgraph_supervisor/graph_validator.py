@@ -5,8 +5,8 @@ from collections import defaultdict, deque
 from .loopspec import LoopSpec, NodeKind, Outcome
 
 REQUIRED_OUTCOMES: dict[NodeKind, frozenset[Outcome]] = {
-    "dsh_execute": frozenset({"pass"}),
-    "verifier": frozenset(),
+    "dsh_execute": frozenset({"pass", "fail", "exhausted"}),
+    "verifier": frozenset({"fail", "retry", "approve", "auto_promote", "exhausted"}),
     "human_gate": frozenset({"approve", "retry", "reject"}),
     "promotion": frozenset({"pass"}),
     "terminal": frozenset(),
@@ -63,3 +63,24 @@ def validate_loopgraph(spec: LoopSpec, *, require_coding_supervisor: bool = Fals
         required = {"dsh_execute", "verifier", "human_gate", "promotion", "terminal"}
         if missing_kinds := sorted(required - kinds):
             raise ValueError(f"coding-supervisor graph is missing required node kinds: {missing_kinds}")
+        role_kinds = {"execute": "dsh_execute", "verify": "verifier", "human_gate": "human_gate", "promote": "promotion", "complete": "terminal", "failed": "terminal"}
+        for role, kind in role_kinds.items():
+            matches = [node for node in spec.nodes if node.role == role]
+            if len(matches) != 1 or matches[0].kind != kind:
+                raise ValueError(f"coding-supervisor role {role} requires one {kind} node")
+        execute = next(node for node in spec.nodes if node.role == "execute")
+        if spec.entrypoint != execute.id:
+            raise ValueError("coding-supervisor entrypoint must have the execute role")
+        roles = {node.role: node.id for node in spec.nodes if node.role}
+        required_routes: dict[tuple[str, Outcome], str] = {
+            ("execute", "pass"): "verify", ("execute", "fail"): "execute", ("execute", "exhausted"): "human_gate",
+            ("verify", "retry"): "execute", ("verify", "approve"): "human_gate", ("verify", "auto_promote"): "promote", ("verify", "exhausted"): "human_gate",
+            ("human_gate", "approve"): "promote", ("human_gate", "retry"): "execute", ("human_gate", "reject"): "failed", ("promote", "pass"): "complete",
+        }
+        routes = {(edge.source, outcome): edge.target for edge in spec.edges for outcome in edge.outcomes}
+        for (source_role, outcome), target_role in required_routes.items():
+            if routes.get((roles[source_role], outcome)) != roles[target_role]:
+                raise ValueError(f"coding-supervisor route {source_role}/{outcome} must target {target_role}")
+        fail_target = routes.get((roles["verify"], "fail"))
+        if fail_target not in {roles["execute"], roles["human_gate"]}:
+            raise ValueError("coding-supervisor verifier/fail must target execute or human_gate")

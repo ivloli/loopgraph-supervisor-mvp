@@ -1,5 +1,6 @@
 export type LoopStatus = 'IDLE' | 'RUNNING' | 'UNCERTAIN' | 'PAUSED' | 'WAITING_HITL' | 'COMPLETED' | 'FAILED';
-export type LoopNode = 'EXECUTE' | 'VERIFY' | 'PROMOTE' | 'HITL' | 'COMPLETED' | 'FAILED';
+import type { LoopSpec } from './loopspec.js';
+export type LoopNode = string;
 export interface AcceptanceContract {
     readonly commands?: readonly string[];
     readonly allowedFiles?: readonly string[];
@@ -40,8 +41,17 @@ export interface LoopState {
         readonly sha: string;
         readonly parentId?: string;
         readonly status: 'BASELINE' | 'PROMOTED' | 'ROLLED_BACK';
+        readonly loopSpec?: LoopSpec;
     }[];
     readonly activeVersion?: string;
+    readonly loopSpec: LoopSpec;
+    readonly loopSpecHash: string;
+    readonly evolution?: {
+        readonly kind: 'loopspec';
+        readonly candidatePath: string;
+        readonly predecessorHash: string;
+    };
+    readonly candidateLoopSpec?: LoopSpec;
 }
 export interface LoopGraphEvent {
     readonly workflowId: string;

@@ -56,6 +56,8 @@ python -m loopgraph_supervisor.main
 
 真实 adapter 在 `loopgraph_supervisor/adapters.py` 的 `DeepSeekHarnessAgent`，直接调用官方 `DeepSeekHarness`。SDK 是默认模式；没有依赖、凭据或有效模型路由时会显式失败。
 
+A 把 DSH 当作 Agent runtime，而不是 Chat API adapter。每次真实 run 会保存 bounded runtime facts：session id、SDK/model、finish reason、event/notification 类型统计、工具事件类型、event stream hash 和 workspace changed files。完整 event payload 不写入 Supervisor SQLite；Host verifier evidence 单独保存，不能由 DSH runtime facts 替代。
+
 生产环境不要把 key 写入 shell history 或 Git。真实隔离 Builder 使用仓库外的 mode-0600 relay secret 文件。
 
 ## A 版 Web UI 与 CLI
@@ -145,6 +147,8 @@ coding workflow 应提供验收契约：
 当前硬化计划见 [PLAN.md](PLAN.md)，架构与行为演进见 [CHANGELOG.md](CHANGELOG.md)。未完成项不会视为已交付能力。
 
 DSH-native TypeScript 插件 B 版位于 [packages/dsh-loopgraph-supervisor](packages/dsh-loopgraph-supervisor)，其入口、Cordis seam 和事件模型见 [PLUGIN_TRD.md](packages/dsh-loopgraph-supervisor/PLUGIN_TRD.md)。Python 版 A 作为完整外部 Supervisor reference 保留。
+
+A/B 共享 versioned LoopSpec schema 和 transition vectors。A 使用 Python interpreter/SQLite，B 使用 TypeScript interpreter/checksummed sidecar；B 的 `/loop evolve` 通过当前 DSH Agent runtime 生成下一 revision，并复用现有 Doublecheck、Git scope、HITL 和 recovery 管线。
 
 ## 测试
 

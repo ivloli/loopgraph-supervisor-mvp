@@ -19,7 +19,11 @@ DSH agent loop / tools / workspace / session persistence
 
 The Python version proves the full control-plane semantics independently. The plugin version proves the same concepts can be hosted in DSH itself and can observe the exact session and agent that perform the work.
 
-Keeping both versions is deliberate: the state machine remains testable and Harness-neutral, while the plugin adds DSH-native commands, events, and UI integration points.
+Keeping both versions is deliberate: A remains the external Harness-neutral reference, while B adds DSH-native commands, events, and UI integration points. Both now share the versioned LoopSpec JSON contract, transition vectors, graph validation semantics, predecessor binding, and Host-owned active pointer boundary.
+
+### Shared LoopSpec runtime
+
+B no longer treats TypeScript transition literals as the graph authority. `src/loopspec.ts` loads the same schema as A, validates reachability, termination, node roles, outcomes, and unique routes, and resolves `source + outcome -> target`. `LoopState` durably stores the active spec and content hash. `/loop evolve` asks the current DSH Agent session to write the next revision, then the plugin validates it before the existing Doublecheck/Git/HITL pipeline. Existing JSONL durability, locks, recovery, Gate, and Git code remain unchanged.
 
 ## 3. Official extension points used
 

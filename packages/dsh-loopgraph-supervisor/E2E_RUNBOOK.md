@@ -42,6 +42,32 @@ dsh plugin --profile web add dsh-background-agents
 
 `dsh-background-agents` 需要 profile 已经提供 continuable subagent provider。生产环境不要直接依赖 `main`，应替换为审查过的 commit。
 
+### 2.1 LoopSpec RSI 配置
+
+在 plugin config 中设置目标仓库 active artifact：
+
+```yaml
+loopSpecPath: /absolute/repo/configs/loopspecs/coding-supervisor/v1.json
+```
+
+该路径必须位于当前 Git workspace；candidate 会写入同目录的下一 revision，例如 `v2.json`。
+
+在 DSH Web session 中执行：
+
+```text
+/loop evolve Send explicit verifier failure to human review while preserving bounded retry.
+/loop status
+/loop logs 20
+```
+
+预期 DSH 创建 `v2.json`，plugin 记录 `EVOLUTION_REQUESTED` 和 `loopspec_gate` evidence，并在 Doublecheck/Git scope 通过后进入 `WAITING_HITL/PROMOTION_REVIEW`。检查 diff 后执行：
+
+```text
+/loop approve Reviewed LoopSpec revision, predecessor hash, graph routes, and gate evidence.
+```
+
+再次 `/loop status`，确认 `loopSpec.revision=2`、`loopSpecHash` 已变化、状态为 `COMPLETED`。重启 DSH 后状态应从 sidecar 恢复，下一 workflow 应继承 active v2。
+
 ## 3. Web 真实 E2E
 
 设置 API key 后启动 Web：

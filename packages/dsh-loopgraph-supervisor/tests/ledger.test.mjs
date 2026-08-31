@@ -8,14 +8,174 @@ import { join } from 'node:path'
 import { appendLoopEvent, decision, foldState, initialState, loadLoopEvents, withLoopOperationLock } from '../lib/ledger.js'
 import { archiveReports, gitCandidateFingerprint, parsePorcelainPaths, prepareGitCandidate, rejectCandidate } from '../lib/git.js'
 import { apply, specRevision } from '../lib/index.js'
+import { loadLoopSpec, loadWorkspaceLoopSpec, loopSpecHash, nextNode, nodeForRole, validateLoopSpec } from '../lib/loopspec.js'
 import { verifyCommands } from '../lib/verifier.js'
 
 test('creates an explainable initial state and decision', () => {
   const state = initialState('wf-1', 'run tests', 3, { commands: ['pytest -q'] })
   const record = decision('PLAN', 'Why start?', 'start', ['human requested it'], [], 'workspace may change', 'create durable state')
-  assert.equal(state.node, 'EXECUTE')
+  assert.equal(state.node, 'execute')
   assert.equal(state.maxAttempts, 3)
   assert.equal(record.decision, 'start')
+})
+
+test('shared LoopSpec vectors match the TypeScript interpreter', () => {
+  const spec = loadLoopSpec()
+  const vectors = JSON.parse(readFileSync(join(process.cwd(), '../../configs/loopspecs/coding-supervisor/test-vectors.json'), 'utf8'))
+  for (const vector of vectors) {
+    const source = nodeForRole(spec, vector.source_role)
+    const expected = nodeForRole(spec, vector.expected_role)
+    assert.equal(nextNode(spec, source, vector.outcome, vector.iteration), expected)
+  }
+})
+
+test('B default LoopSpec is identical to the A repository artifact', () => {
+  const packaged = JSON.parse(readFileSync(join(process.cwd(), 'loopspec.v1.json'), 'utf8'))
+  const shared = JSON.parse(readFileSync(join(process.cwd(), '../../configs/loopspecs/coding-supervisor/v1.json'), 'utf8'))
+  assert.deepEqual(packaged, shared)
+  assert.equal(loopSpecHash(packaged), readFileSync(join(process.cwd(), '../../configs/loopspecs/coding-supervisor/v1.sha256'), 'utf8').trim())
+})
+
+test('legacy uppercase node ids migrate onto the active LoopSpec roles', () => {
+  const root = mkdtempSync(join(tmpdir(), 'loopgraph-legacy-node-'))
+  const previous = process.env.DSH_HOME
+  process.env.DSH_HOME = root
+  try {
+    const agent = { id: 'legacy-node', session: { events: [] } }
+    const state = initialState('legacy', 'resume', 2, {})
+    const legacy = { ...state, node: 'HITL' }
+    delete legacy.loopSpec
+    delete legacy.loopSpecHash
+    appendLoopEvent(agent, { workflowId: legacy.workflowId, kind: 'state', state: legacy })
+    assert.equal(foldState(agent).node, 'hitl')
+    assert.equal(foldState(agent).loopSpec.revision, 1)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('LoopSpec validator rejects non-terminating graph', () => {
+  const spec = structuredClone(loadLoopSpec())
+  spec.edges = spec.edges.filter(edge => edge.source !== 'promote')
+  assert.throws(() => validateLoopSpec(spec), /unreachable|no outgoing edge|terminating path/)
+})
+
+test('/loop evolve persists a DSH-native LoopSpec evolution request', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'loopgraph-evolve-'))
+  const repo = join(root, 'repo')
+  const previous = process.env.DSH_HOME
+  process.env.DSH_HOME = root
+  try {
+    execFileSync('mkdir', ['-p', join(repo, 'configs', 'loopspecs', 'coding-supervisor')])
+    execFileSync('git', ['init'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'LoopGraph Test'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'loopgraph@example.test'], { cwd: repo })
+    const specPath = join(repo, 'configs', 'loopspecs', 'coding-supervisor', 'v1.json')
+    writeFileSync(specPath, JSON.stringify(loadLoopSpec(), null, 2))
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'baseline'], { cwd: repo })
+    const events = []
+    const followups = []
+    const agent = { id: 'session-evolve', session: { header: { cwd: repo }, events, append(type, data) { events.push({ type, data }) } }, followup(message) { followups.push(message) } }
+    let loopCommand
+    const ctx = { on() {}, agents: { list: () => [agent] }, userQuestions: { ask: async () => ({ answers: [] }) }, commands: { register(command) { loopCommand = command } } }
+    apply(ctx, { maxAttempts: 2, requirePromotionApproval: true, loopSpecPath: specPath })
+
+    const result = await loopCommand.handler({ agent, rawInput: 'evolve escalate explicit verifier failure to human review', signal: new AbortController().signal })
+    const state = foldState(agent)
+
+    assert.equal(result.kind, 'success')
+    assert.equal(state.status, 'RUNNING')
+    assert.equal(state.node, 'execute')
+    assert.equal(state.evolution.kind, 'loopspec')
+    assert.match(state.evolution.candidatePath, /v2\.json$/)
+    assert.equal(state.evolution.predecessorHash, state.loopSpecHash)
+    assert.equal(followups.length, 1)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('/loop evolve validates and human-activates a v2 LoopSpec', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'loopgraph-evolve-activate-'))
+  const repo = join(root, 'repo')
+  const previous = process.env.DSH_HOME
+  process.env.DSH_HOME = root
+  try {
+    execFileSync('mkdir', ['-p', join(repo, 'configs', 'loopspecs', 'coding-supervisor')])
+    execFileSync('git', ['init'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'LoopGraph Test'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'loopgraph@example.test'], { cwd: repo })
+    const active = loadLoopSpec()
+    const specPath = join(repo, 'configs', 'loopspecs', 'coding-supervisor', 'v1.json')
+    writeFileSync(specPath, JSON.stringify(active, null, 2))
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'baseline'], { cwd: repo })
+    const events = []
+    const handlers = {}
+    const agent = { id: 'session-evolve-activate', session: { header: { cwd: repo }, events, append(type, data) { events.push({ type, data }) } }, followup() {}, cancel() {} }
+    let loopCommand
+    const ctx = {
+      on(name, handler) { handlers[name] = handler },
+      agents: { list: () => [agent] },
+      userQuestions: { ask: async () => ({ answers: [] }) },
+      commands: {
+        register(command) { loopCommand = command },
+        find() { return {} },
+        execute: async () => ({ result: { kind: 'success', text: 'Verdict: deliverable' } }),
+      },
+    }
+    apply(ctx, { maxAttempts: 2, requirePromotionApproval: true, loopSpecPath: specPath })
+    const started = await loopCommand.handler({ agent, rawInput: 'evolve send explicit verifier failure to human review', signal: new AbortController().signal })
+    assert.equal(started.kind, 'success')
+    const candidatePath = join(repo, 'configs', 'loopspecs', 'coding-supervisor', 'v2.json')
+    const candidate = structuredClone(active)
+    candidate.revision = 2
+    candidate.predecessor_hash = loopSpecHash(active)
+    candidate.edges = candidate.edges.flatMap(edge => {
+      if (edge.source === 'verify' && edge.target === 'execute') return [{ ...edge, outcomes: ['retry'] }]
+      if (edge.source === 'verify' && edge.target === 'hitl' && edge.outcomes.includes('approve')) return [edge, { source: 'verify', target: 'hitl', outcomes: ['fail'] }]
+      return [edge]
+    })
+    writeFileSync(candidatePath, JSON.stringify(candidate, null, 2))
+    events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'LOOPGRAPH_RESULT: {"status":"pass","summary":"v2 ready"}' }] } } })
+    await handlers['agent/turn-stopping']({ agent, signal: new AbortController().signal })
+    const waiting = foldState(agent)
+    assert.equal(waiting.status, 'WAITING_HITL')
+    assert.equal(waiting.hitlReason, 'PROMOTION_REVIEW')
+    assert.equal(waiting.candidateLoopSpec.revision, 2)
+
+    const approved = await loopCommand.handler({ agent, rawInput: 'approve reviewed graph diff and evidence', signal: new AbortController().signal })
+    const activated = foldState(agent)
+    assert.equal(approved.kind, 'success')
+    assert.equal(activated.status, 'COMPLETED')
+    assert.equal(activated.loopSpec.revision, 2)
+    assert.equal(activated.loopSpecHash, loopSpecHash(candidate))
+    assert.equal(activated.node, 'complete')
+    assert.equal(loadWorkspaceLoopSpec(repo, active).revision, 2)
+
+    const rolledBack = await loopCommand.handler({ agent, rawInput: `rollback version:${activated.workflowId}:baseline`, signal: new AbortController().signal })
+    assert.equal(rolledBack.kind, 'success')
+    assert.equal(loadWorkspaceLoopSpec(repo, active).revision, 1)
+
+    const nextEvents = []
+    const nextAgent = { id: 'session-evolve-next', session: { header: { cwd: repo }, events: nextEvents, append(type, data) { nextEvents.push({ type, data }) } }, followup() {}, cancel() {} }
+    let nextCommand
+    const nextCtx = { on() {}, agents: { list: () => [nextAgent] }, userQuestions: { ask: async () => ({ answers: [] }) }, commands: { register(command) { nextCommand = command } } }
+    apply(nextCtx, { maxAttempts: 2, requirePromotionApproval: true, loopSpecPath: specPath })
+    const next = await nextCommand.handler({ agent: nextAgent, rawInput: 'start verify active LoopSpec persistence', signal: new AbortController().signal })
+    assert.equal(next.kind, 'success')
+    assert.equal(foldState(nextAgent).loopSpec.revision, 1)
+
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('preserves the first path character from porcelain status', () => {
@@ -283,7 +443,7 @@ test('approve persists the optional human comment in evidence and the decision l
     const state = {
       ...initialState('wf-approve', 'promote candidate', 2, { allowedFiles: ['artifact.txt'] }),
       status: 'WAITING_HITL',
-      node: 'HITL',
+      node: 'hitl',
       attempt: 2,
       baselineCommit: baseline,
       hitlReason: 'PROMOTION_REVIEW',
@@ -408,7 +568,7 @@ test('verify-existing recovery can auto-promote without nesting the operation lo
     }
     const state = {
       ...initialState('wf-recover-promote', 'verify existing', 2, { commands: ['true'], allowedFiles: ['artifact.txt'] }),
-      status: 'UNCERTAIN', node: 'HITL', attempt: 1, baselineCommit: baseline, hitlReason: 'UNCERTAIN_RECOVERY',
+      status: 'UNCERTAIN', node: 'hitl', attempt: 1, baselineCommit: baseline, hitlReason: 'UNCERTAIN_RECOVERY',
       activeVersion: 'version:wf-recover-promote:baseline',
       versions: [{ id: 'version:wf-recover-promote:baseline', sha: baseline, status: 'BASELINE' }],
     }
@@ -463,7 +623,7 @@ test('pause prevents an in-flight verification result from overwriting state', a
     }
     const state = {
       ...initialState('wf-pause-race', 'pause verification', 2, { commands: ['sleep 0.15'], allowedFiles: ['artifact.txt'] }),
-      status: 'RUNNING', node: 'EXECUTE', attempt: 1, baselineCommit: baseline,
+      status: 'RUNNING', node: 'execute', attempt: 1, baselineCommit: baseline,
     }
     appendLoopEvent(agent, { workflowId: state.workflowId, kind: 'state', state })
     let loopCommand

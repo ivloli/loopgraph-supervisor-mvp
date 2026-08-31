@@ -73,7 +73,7 @@ def validate_loopgraph(spec: LoopSpec, *, require_coding_supervisor: bool = Fals
             raise ValueError("coding-supervisor entrypoint must have the execute role")
         roles = {node.role: node.id for node in spec.nodes if node.role}
         required_routes: dict[tuple[str, Outcome], str] = {
-            ("execute", "pass"): "verify", ("execute", "fail"): "execute", ("execute", "exhausted"): "human_gate",
+            ("execute", "pass"): "verify", ("execute", "exhausted"): "human_gate",
             ("verify", "retry"): "execute", ("verify", "approve"): "human_gate", ("verify", "auto_promote"): "promote", ("verify", "exhausted"): "human_gate",
             ("human_gate", "approve"): "promote", ("human_gate", "retry"): "execute", ("human_gate", "reject"): "failed", ("promote", "pass"): "complete",
         }
@@ -81,6 +81,9 @@ def validate_loopgraph(spec: LoopSpec, *, require_coding_supervisor: bool = Fals
         for (source_role, outcome), target_role in required_routes.items():
             if routes.get((roles[source_role], outcome)) != roles[target_role]:
                 raise ValueError(f"coding-supervisor route {source_role}/{outcome} must target {target_role}")
+        execute_fail_target = routes.get((roles["execute"], "fail"))
+        if execute_fail_target not in {roles["execute"], roles["human_gate"]}:
+            raise ValueError("coding-supervisor execute/fail must target execute or human_gate")
         fail_target = routes.get((roles["verify"], "fail"))
         if fail_target not in {roles["execute"], roles["human_gate"]}:
             raise ValueError("coding-supervisor verifier/fail must target execute or human_gate")

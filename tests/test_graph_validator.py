@@ -42,3 +42,12 @@ def test_coding_profile_requires_governance_nodes():
     spec = LoopSpec("coding-supervisor", 1, "execute", nodes, edges, 3)
     with pytest.raises(ValueError, match="required outcomes|required node kinds"):
         validate_loopgraph(spec, require_coding_supervisor=True)
+
+
+def test_coding_profile_allows_explicit_agent_failure_to_escalate():
+    baseline = default_coding_spec()
+    edges = tuple(type(edge)(edge.source, "hitl" if edge.source == "execute" and "fail" in edge.outcomes else edge.target, edge.outcomes) for edge in baseline.edges)
+    candidate = LoopSpec(baseline.spec_id, 2, baseline.entrypoint, baseline.nodes, edges, baseline.max_iterations, baseline.content_hash())
+
+    validate_loopgraph(candidate, require_coding_supervisor=True)
+    assert candidate.next_node("execute", "fail") == "hitl"

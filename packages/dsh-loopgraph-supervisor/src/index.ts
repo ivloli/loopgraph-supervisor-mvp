@@ -177,7 +177,13 @@ async function handleAssistantResult(ctx: Context, config: Config, agent: Agent,
         emitDecision(agent, waiting, decision('HITL_REQUIRED', 'Why wait for a human?', 'wait_for_human', [marker.summary, 'retry budget exhausted'], [{ type: 'dsh_result', summary: marker.summary }], 'Further automatic changes may compound the failure', 'Wait for approve, retry, or reject'))
         return
       }
-      const retried = transition(agent, state, { node: route(state, 'fail'), attempt: state.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, 'DSH reported a failed result')
+      const failureTarget = route(state, 'fail')
+      if (failureTarget === roleNode(state, 'human_gate')) {
+        const waiting = transition(agent, state, { status: 'WAITING_HITL', node: failureTarget, hitlReason: 'FAILURE_REVIEW' }, 'active LoopSpec escalated explicit DSH failure to human review')
+        emitDecision(agent, waiting, decision('HITL_REQUIRED', 'Why escalate this explicit Agent failure?', 'wait_for_human', [marker.summary, 'active LoopSpec routes execute/fail to human_gate'], [{ type: 'dsh_result', summary: marker.summary }, { type: 'loopspec_route', source: state.node, outcome: 'fail', target: failureTarget, specHash: state.loopSpecHash }], 'Automatic retry would repeat a failure the active policy classifies as non-recoverable', 'Wait for human retry or rejection'))
+        return
+      }
+      const retried = transition(agent, state, { node: failureTarget, attempt: state.attempt + 1, candidateFingerprint: null, preparedCandidate: null }, 'DSH reported a failed result')
       emitDecision(agent, retried, decision('RETRY', 'Why retry?', 'retry', [marker.summary, 'retry budget remains'], [{ type: 'dsh_result', summary: marker.summary }], 'The next DSH turn may modify more files', 'Apply the failure feedback and re-run the task'))
       agent.followup(createUserMessage({ content: [{ type: 'text', text: `${workflowPrompt(retried)}\nPrevious failure feedback: ${marker.summary}` }], source: { kind: 'plugin', plugin: name } }))
     })

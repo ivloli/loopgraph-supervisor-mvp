@@ -134,11 +134,13 @@ export function validateLoopSpec(spec: LoopSpec): void {
   }
   const roles = Object.fromEntries(Object.keys(roleKinds).map(role => [role, nodeForRole(spec, role)]))
   const requiredRoutes: Array<[string, Outcome, string]> = [
-    ['execute', 'pass', 'verify'], ['execute', 'fail', 'execute'], ['execute', 'exhausted', 'human_gate'],
+    ['execute', 'pass', 'verify'], ['execute', 'exhausted', 'human_gate'],
     ['verify', 'retry', 'execute'], ['verify', 'approve', 'human_gate'], ['verify', 'auto_promote', 'promote'], ['verify', 'exhausted', 'human_gate'],
     ['human_gate', 'approve', 'promote'], ['human_gate', 'retry', 'execute'], ['human_gate', 'reject', 'failed'], ['promote', 'pass', 'complete'],
   ]
   for (const [sourceRole, outcome, targetRole] of requiredRoutes) if (nextNode(spec, roles[sourceRole], outcome, 0) !== roles[targetRole]) throw new Error(`LoopSpec route ${sourceRole}/${outcome} must target ${targetRole}`)
+  const executeFail = nextNode(spec, roles.execute, 'fail', 0)
+  if (![roles.execute, roles.human_gate].includes(executeFail)) throw new Error('LoopSpec execute/fail must target execute or human_gate')
   const verifierFail = nextNode(spec, roles.verify, 'fail', 0)
   if (![roles.execute, roles.human_gate].includes(verifierFail)) throw new Error('LoopSpec verifier/fail must target execute or human_gate')
 }

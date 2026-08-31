@@ -136,11 +136,7 @@ test('/loop evolve validates and human-activates a v2 LoopSpec', async () => {
     const candidate = structuredClone(active)
     candidate.revision = 2
     candidate.predecessor_hash = loopSpecHash(active)
-    candidate.edges = candidate.edges.flatMap(edge => {
-      if (edge.source === 'verify' && edge.target === 'execute') return [{ ...edge, outcomes: ['retry'] }]
-      if (edge.source === 'verify' && edge.target === 'hitl' && edge.outcomes.includes('approve')) return [edge, { source: 'verify', target: 'hitl', outcomes: ['fail'] }]
-      return [edge]
-    })
+    candidate.edges = candidate.edges.map(edge => edge.source === 'execute' && edge.outcomes.includes('fail') ? { ...edge, target: 'hitl' } : edge)
     writeFileSync(candidatePath, JSON.stringify(candidate, null, 2))
     events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'LOOPGRAPH_RESULT: {"status":"pass","summary":"v2 ready"}' }] } } })
     await handlers['agent/turn-stopping']({ agent, signal: new AbortController().signal })
@@ -157,6 +153,23 @@ test('/loop evolve validates and human-activates a v2 LoopSpec', async () => {
     assert.equal(activated.loopSpecHash, loopSpecHash(candidate))
     assert.equal(activated.node, 'complete')
     assert.equal(loadWorkspaceLoopSpec(repo, active).revision, 2)
+
+    const failureEvents = []
+    const failureHandlers = {}
+    const failureAgent = { id: 'session-v2-failure', session: { header: { cwd: repo }, events: failureEvents, append(type, data) { failureEvents.push({ type, data }) } }, followup() {}, cancel() {} }
+    let failureCommand
+    const failureCtx = { on(name, handler) { failureHandlers[name] = handler }, agents: { list: () => [failureAgent] }, userQuestions: { ask: async () => ({ answers: [] }) }, commands: { register(command) { failureCommand = command } } }
+    apply(failureCtx, { maxAttempts: 2, requirePromotionApproval: true, loopSpecPath: specPath })
+    const failureStarted = await failureCommand.handler({ agent: failureAgent, rawInput: 'start task with a missing authoritative contract', signal: new AbortController().signal })
+    assert.equal(failureStarted.kind, 'success')
+    failureEvents.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'LOOPGRAPH_RESULT: {"status":"fail","summary":"required contract is missing"}' }] } } })
+    await failureHandlers['agent/turn-stopping']({ agent: failureAgent, signal: new AbortController().signal })
+    const escalated = foldState(failureAgent)
+    assert.equal(escalated.status, 'WAITING_HITL')
+    assert.equal(escalated.hitlReason, 'FAILURE_REVIEW')
+    assert.equal(escalated.attempt, 1)
+    const failureRejected = await failureCommand.handler({ agent: failureAgent, rawInput: 'reject expected escalation evidence captured', signal: new AbortController().signal })
+    assert.equal(failureRejected.kind, 'success')
 
     const rolledBack = await loopCommand.handler({ agent, rawInput: `rollback version:${activated.workflowId}:baseline`, signal: new AbortController().signal })
     assert.equal(rolledBack.kind, 'success')

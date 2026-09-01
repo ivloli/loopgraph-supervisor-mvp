@@ -138,7 +138,8 @@ class Supervisor:
                     raise ValueError("approval request does not match the workflow LoopSpec")
                 workflow.status, workflow.current_node = WorkflowStatus.RUNNING, self._node(workflow, self._spec_next(workflow, "hitl", "approve", workflow.attempt - 1))
             elif decision == "retry":
-                if workflow.attempt >= workflow.max_attempts:
+                spec = self._workflow_spec(workflow)
+                if workflow.attempt >= min(workflow.max_attempts, spec.max_iterations):
                     raise ValueError("HITL retry budget is exhausted")
                 workflow.status, workflow.current_node = WorkflowStatus.RUNNING, self._node(workflow, self._spec_next(workflow, "hitl", "retry", workflow.attempt - 1))
             else:
@@ -187,22 +188,25 @@ class Supervisor:
         return self.run(workflow_id) if workflow.status == WorkflowStatus.RUNNING else workflow
 
     def rollback(self, workflow_id: str, version_id: str) -> Workflow:
-        workflow = self.store.get_workflow(workflow_id)
-        version = self.store.get_version(workflow_id, version_id)
-        if version is None:
-            raise KeyError(version_id)
-        artifact = decode(version["artifact"], {})
-        workspace = workflow.acceptance.get("workspace")
-        target_commit = artifact.get("candidate_commit", "") or artifact.get("baseline_commit", "")
-        if workspace and target_commit:
-            git = GitWorkspace(workspace)
-            if git.available:
-                git.switch_to(target_commit)
-        workflow.active_version = version_id
-        self._decision(workflow, "ROLLBACK", "Why should the active version change?", "rollback", ["The requested target version exists in this workflow", "The Git workspace was clean before switching"], [{"version_id": version_id, "commit": target_commit}], [], "Rollback may restore an older behavior", f"Set active_version to {version_id} and workspace commit to {target_commit}")
-        self.store.save_workflow(workflow)
-        self.store.append_event(workflow_id, "version_rolled_back", payload={"version_id": version_id})
-        return workflow
+        with self._workflow_lock(workflow_id):
+            workflow = self.store.get_workflow(workflow_id)
+            if workflow.status not in {WorkflowStatus.COMPLETED, WorkflowStatus.FAILED}:
+                raise ValueError("rollback requires a terminal workflow")
+            version = self.store.get_version(workflow_id, version_id)
+            if version is None:
+                raise KeyError(version_id)
+            artifact = decode(version["artifact"], {})
+            workspace = workflow.acceptance.get("workspace")
+            target_commit = artifact.get("candidate_commit", "") or artifact.get("baseline_commit", "")
+            if workspace and target_commit:
+                git = GitWorkspace(workspace)
+                if git.available:
+                    git.switch_to(target_commit)
+            workflow.active_version = version_id
+            self._decision(workflow, "ROLLBACK", "Why should the active version change?", "rollback", ["The requested target version exists in this workflow", "The Git workspace was clean before switching"], [{"version_id": version_id, "commit": target_commit}], [], "Rollback may restore an older behavior", f"Set active_version to {version_id} and workspace commit to {target_commit}")
+            self.store.save_workflow(workflow)
+            self.store.append_event(workflow_id, "version_rolled_back", payload={"version_id": version_id})
+            return workflow
 
     def explain(self, workflow_id: str) -> dict[str, Any]:
         return {"workflow": self.store.get_workflow(workflow_id).__dict__, **self.store.explain(workflow_id)}
@@ -265,7 +269,7 @@ class Supervisor:
             git = GitWorkspace(workspace)
             changed = git.changed_files()
             allowed = workflow.acceptance.get("allowed_files", [])
-            scope_passed = not allowed or all(path in allowed for path in changed)
+            scope_passed = bool(allowed) and bool(changed) and all(path in allowed for path in changed)
             result.evidence.append({"type": "git_scope", "changed_files": changed, "allowed_files": allowed, "passed": scope_passed})
             if not scope_passed:
                 result.passed = False

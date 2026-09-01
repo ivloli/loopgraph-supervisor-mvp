@@ -142,6 +142,8 @@ coding workflow 应提供验收契约：
 
 `loop evolve` 只创建人工 `EvolutionTrigger`；proposal worker 消费后才调用 DSH Builder 并创建 quarantine candidate。它不会直接修改 active LoopGraph、merge 或发布版本。GitHub PR 和 activation adapter 需要显式调用，不会由 API 服务自动产生远程副作用。
 
+重复任务失败也可以自动触发 RSI：A 会聚合持久化 verifier failures，规范化 failure feedback，并在至少两个同类失败出现时创建去重的 `task_feedback` trigger。该 trigger 只进入 proposal inbox，仍需 DSH candidate、Graph/Test/Coverage/Verifier Gate、PR 和人工 approval。
+
 完整面试讲解、A/B 总体架构、流程图、Gin 两版本复盘、自研与插件候选取舍矩阵见 [INTERVIEW_DEMO.md](INTERVIEW_DEMO.md)，技术设计和决策理由见 [TRD.md](TRD.md)。
 
 全新 macOS/Linux 机器的安装、Docker gate、A/B 启动、真实 SDK smoke test、停止和故障排查见 [docs/NEW_MACHINE_RUNBOOK.md](docs/NEW_MACHINE_RUNBOOK.md)。

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -120,3 +122,22 @@ class EvolutionTriggerStore:
         trigger = trigger_from_human(target_id, reviewer, comment)
         self.save(trigger_id, trigger)
         return trigger_id, trigger
+
+    def create_task_feedback_request(self, target_id: str, feedback: tuple[TaskFeedback, ...], *, minimum_failures: int = 2) -> tuple[str, EvolutionTrigger] | None:
+        trigger = trigger_from_feedback(target_id, feedback, minimum_failures=minimum_failures)
+        if trigger is None:
+            return None
+        task_evidence = tuple(item for item in trigger.evidence if isinstance(item, TaskFeedback))
+        trigger_id = f"task:{target_id}:{failure_signature(task_evidence)}"
+        if self.get(trigger_id) is not None:
+            return None
+        self.save(trigger_id, trigger)
+        return trigger_id, trigger
+
+
+def normalize_feedback(value: str) -> str:
+    return re.sub(r"\s+", " ", value.casefold()).strip()
+
+
+def failure_signature(feedback: tuple[TaskFeedback, ...]) -> str:
+    return hashlib.sha256("\n".join(sorted(normalize_feedback(item.feedback) for item in feedback)).encode()).hexdigest()[:24]

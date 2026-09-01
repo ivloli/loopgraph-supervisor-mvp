@@ -505,6 +505,8 @@ Phase 2 当前已实现 candidate manifest、proof contract、quarantine registr
 
 补充：人工可以绕过自动 failure threshold 主动创建 `human_feedback` trigger。该 trigger 必须持久化 reviewer 和 comment，并只启动 DSH candidate proposal；它不能绕过 Graph Gate、验证、PR 或人工 approval。
 
+A 同时支持 task-driven trigger：`Supervisor._verify()` 保存失败验证后，Host 聚合最近失败 feedback，规范化文本并以 failure signature 去重；达到默认两个失败的阈值后写入 `task_feedback` trigger。该 trigger 不直接修改 workflow 或 active spec。
+
 ### D-030：人工 feedback 与 approval 分离
 
 决定：人工 `evolve`/PR comment 是新的 candidate 请求；人工 `approve` 是对已验证具体 candidate head 的晋级授权。两者使用不同的事件和状态，不能把 feedback 当成 approval，也不能让 DSH 自己批准。

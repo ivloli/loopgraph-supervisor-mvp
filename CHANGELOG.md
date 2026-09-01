@@ -55,6 +55,7 @@ All notable architectural and behavioral changes are recorded here. Dates descri
 - Added human/task `EvolutionTrigger` persistence, the `/evolution/triggers` and `loopgraph evolve` entry points, and a claim-based proposal worker that creates quarantined candidates without activation; external DSH calls remain at-least-once across worker crashes.
 - Added Host-owned Python Test/Coverage Gate evidence and durable `EvolutionRun` correlation for trigger, baseline, candidate, and promotion-review state.
 - Added explicit GitHub PR/review and post-activation canary/rollback adapters with EvolutionRun lifecycle binding.
+- Added A task-feedback aggregation: repeated normalized verifier failures create one durable, deduplicated `task_feedback` EvolutionTrigger for bounded RSI proposal review.
 
 ### Fixed
 

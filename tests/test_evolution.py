@@ -3,7 +3,7 @@ import pytest
 from loopgraph_supervisor.candidate_store import CandidateStore
 from loopgraph_supervisor.evaluation import LoopSpecEvalTask
 from loopgraph_supervisor.evolution import LoopSpecEvolutionService
-from loopgraph_supervisor.loopspec import LoopSpec, default_coding_spec
+from loopgraph_supervisor.loopspec import LoopSpec, coding_spec_revision
 from loopgraph_supervisor.spec_store import LoopSpecStore
 from loopgraph_supervisor.store import SQLiteStore
 
@@ -31,7 +31,7 @@ class PrivateHoldout:
 def setup_service():
     store = SQLiteStore(":memory:")
     specs = LoopSpecStore(store)
-    baseline = default_coding_spec()
+    baseline = coding_spec_revision(1)
     specs.save(baseline, status="ACTIVE")
     return LoopSpecEvolutionService(specs, CandidateStore(store), PrivateHoldout()), baseline
 

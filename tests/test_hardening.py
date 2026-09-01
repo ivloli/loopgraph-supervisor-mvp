@@ -209,3 +209,36 @@ def test_failed_verification_hitl_cannot_be_approved():
     assert result.status == WorkflowStatus.WAITING_HITL
     with pytest.raises(ValueError, match="verified promotion_review"):
         supervisor.decide_hitl(result.id, "approve")
+
+
+def test_empty_allowed_files_fail_closed_for_git_workspace(tmp_path):
+    git(tmp_path, "init")
+    git(tmp_path, "config", "user.name", "LoopGraph Test")
+    git(tmp_path, "config", "user.email", "loopgraph@example.test")
+    artifact = tmp_path / "artifact.txt"
+    artifact.write_text("baseline\n")
+    git(tmp_path, "add", "artifact.txt")
+    git(tmp_path, "commit", "-m", "baseline")
+
+    class WritingAgent:
+        def execute(self, request):
+            artifact.write_text("candidate\n")
+            return AgentOutput({"response": "candidate"}, "candidate", "session")
+
+    supervisor = Supervisor(SQLiteStore(":memory:"), WritingAgent(), FakeVerifier(pass_on=1))
+    result = supervisor.start("wf-empty-scope", "must have explicit scope", 1, {"workspace": str(tmp_path), "isolate": False})
+
+    assert result.status == WorkflowStatus.WAITING_HITL
+    decisions = supervisor.explain(result.id)["decisions"]
+    assert any(item["decision_type"] == "HITL_REQUIRED" and any(evidence.get("type") == "git_scope" and evidence["passed"] is False for evidence in item["evidence"]) for item in decisions)
+
+
+def test_rollback_rejects_running_workflow():
+    store = SQLiteStore(":memory:")
+    workflow = Workflow("wf-running", "running")
+    store.create_workflow(workflow)
+    store.save_contract(workflow.id, workflow.acceptance)
+    supervisor = Supervisor(store, FakeAgent(["candidate"]), FakeVerifier(pass_on=1))
+
+    with pytest.raises(ValueError, match="terminal"):
+        supervisor.rollback(workflow.id, "missing")

@@ -48,7 +48,7 @@ JSON start input can include an acceptance contract:
 /loop start {"goal":"Fix the failing tests","maxAttempts":3,"acceptance":{"commands":["pytest -q"],"allowedFiles":["src/app.py","tests/test_app.py"]}}
 ```
 
-Configure `loopSpecPath` to the active Git-managed artifact before using native evolution:
+Configure `loopSpecPath` to the active Git-managed artifact before using native evolution. If omitted, the packaged `loopspec.active.json` selects the released v2 artifact:
 
 ```yaml
 config:

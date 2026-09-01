@@ -14,7 +14,7 @@ from loopgraph_supervisor.builder_workspace import prepare_builder_workspace
 from loopgraph_supervisor.candidate_store import CandidateStore
 from loopgraph_supervisor.evaluation import default_eval_tasks
 from loopgraph_supervisor.evolution import LoopSpecEvolutionService
-from loopgraph_supervisor.loopspec import LoopSpec, default_coding_spec
+from loopgraph_supervisor.loopspec import LoopSpec, coding_spec_revision, default_coding_spec
 from loopgraph_supervisor.spec_store import LoopSpecStore
 from loopgraph_supervisor.store import SQLiteStore
 
@@ -38,7 +38,7 @@ class FakeCandidateBuilder:
 
 
 def test_builder_workspace_contains_validation_but_no_canary(tmp_path):
-    active = default_coding_spec()
+    active = coding_spec_revision(1)
     workspace, request = prepare_builder_workspace(tmp_path, "candidate-v2", active, default_eval_tasks())
 
     visible = (workspace / "validation-context.json").read_text()
@@ -88,7 +88,7 @@ def test_docker_builder_rejects_untrusted_runtime_launcher(tmp_path):
 def test_builder_output_is_host_parsed_and_enters_quarantine():
     store = SQLiteStore(":memory:")
     specs = LoopSpecStore(store)
-    active = default_coding_spec()
+    active = coding_spec_revision(1)
     specs.save(active, status="ACTIVE")
     candidate = LoopSpec(active.spec_id, 2, active.entrypoint, active.nodes, active.edges, active.max_iterations, active.content_hash())
     builder = FakeCandidateBuilder(candidate.document())

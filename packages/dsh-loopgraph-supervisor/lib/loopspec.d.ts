@@ -20,6 +20,7 @@ export interface LoopSpec {
 }
 export declare function loopSpecHash(spec: LoopSpec): string;
 export declare function loadLoopSpec(path?: string): LoopSpec;
+export declare function loadActiveLoopSpec(path?: string): LoopSpec;
 export declare function loadWorkspaceLoopSpec(workspace: string, fallback: LoopSpec): LoopSpec;
 export declare function saveWorkspaceLoopSpec(workspace: string, spec: LoopSpec): void;
 export declare function nodeForRole(spec: LoopSpec, role: string): string;

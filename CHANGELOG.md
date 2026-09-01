@@ -49,7 +49,7 @@ All notable architectural and behavioral changes are recorded here. Dates descri
 - Added executable rc.2 Seatbelt and Docker Builder security gates with persisted receipts; rc.2 fails blind reads while the Docker substrate passes.
 - Added exact-version official Linux runtime provenance, complete Docker stdio SDK initialize, live daemon/image gates, and an internal-only fixed DeepSeek relay whose secret mount owns the real credential.
 - Completed the first credentialed real-model Builder run through quarantine, Host-owned binding, validation, and canary proof; it reached `PROMOTION_REVIEW` without activation.
-- Added durable multi-candidate coordination and contradiction detection for the PR2/PR3/PR4 failure mode; only one Host-selected candidate from the canonical parent may proceed to a formal PR.
+- Added durable multi-candidate coordination and contradiction detection; only one Host-selected candidate from the canonical parent may proceed to a formal PR.
 - Added a Git-backed PR preparation gate that revalidates current coordination, approval head, candidate parent, and changed paths before any Git hosting adapter may create a PR.
 - Added versioned LoopGraph JSON loading and semantic graph validation, including reachability, termination, node-kind outcomes, and coding-supervisor governance requirements.
 - Added human/task `EvolutionTrigger` persistence, the `/evolution/triggers` and `loopgraph evolve` entry points, and a claim-based proposal worker that creates quarantined candidates without activation; external DSH calls remain at-least-once across worker crashes.

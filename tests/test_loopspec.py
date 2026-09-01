@@ -1,13 +1,13 @@
 import pytest
 
-from loopgraph_supervisor.loopspec import LoopNode, LoopSpec, default_coding_spec
+from loopgraph_supervisor.loopspec import LoopNode, LoopSpec, coding_spec_revision
 from loopgraph_supervisor.loopspec_interpreter import LoopSpecInterpreter
 from loopgraph_supervisor.spec_store import LoopSpecStore
 from loopgraph_supervisor.store import SQLiteStore
 
 
 def test_default_coding_spec_routes_the_current_graph():
-    spec = default_coding_spec()
+    spec = coding_spec_revision(1)
 
     assert spec.next_node("execute", "pass") == "verify"
     assert spec.next_node("verify", "fail") == "execute"
@@ -21,13 +21,13 @@ def test_default_coding_spec_routes_the_current_graph():
 
 
 def test_loopspec_interpreter_enforces_iteration_guard():
-    spec = default_coding_spec()
+    spec = coding_spec_revision(1)
     with pytest.raises(RuntimeError, match="iteration limit"):
         LoopSpecInterpreter(spec).transition("verify", "retry", spec.max_iterations)
 
 
 def test_loopspec_is_canonical_and_rejects_ambiguous_graphs():
-    spec = default_coding_spec()
+    spec = coding_spec_revision(1)
     assert len(spec.content_hash()) == 64
     assert spec.content_hash() == LoopSpec(**spec.__dict__).content_hash()
 
@@ -38,7 +38,7 @@ def test_loopspec_is_canonical_and_rejects_ambiguous_graphs():
 def test_loopspec_revision_round_trips_through_registry():
     store = SQLiteStore(":memory:")
     registry = LoopSpecStore(store)
-    spec = default_coding_spec()
+    spec = coding_spec_revision(1)
     registry.save(spec, status="ACTIVE")
 
     restored = registry.active(spec.spec_id)
@@ -51,7 +51,7 @@ def test_loopspec_revision_round_trips_through_registry():
 def test_loopspec_revisions_are_immutable_and_only_one_is_active():
     store = SQLiteStore(":memory:")
     registry = LoopSpecStore(store)
-    first = default_coding_spec()
+    first = coding_spec_revision(1)
     registry.save(first, status="ACTIVE")
     second = LoopSpec(
         spec_id=first.spec_id,
@@ -74,7 +74,7 @@ def test_loopspec_revisions_are_immutable_and_only_one_is_active():
 def test_registry_cannot_activate_v2_without_human_activation_path():
     store = SQLiteStore(":memory:")
     registry = LoopSpecStore(store)
-    baseline = default_coding_spec()
+    baseline = coding_spec_revision(1)
     registry.save(baseline, status="ACTIVE")
     candidate = LoopSpec(
         spec_id=baseline.spec_id,

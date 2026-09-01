@@ -489,6 +489,8 @@ A rollback 通过 `(workflow_id, version_id)` 查询。B 为每个 start 生成�
 
 Phase 2 当前已实现 candidate manifest、proof contract、quarantine registry、LoopGraph artifact loader 和 semantic validation gate；真实 active candidate activation 仍需人工晋级路径。
 
+第一次真实 LoopSpec RSI promotion 使用 `loopspec-rsi-v1 -> PR #1 -> loopspec-rsi-v2`，公开证据见 `docs/RSI_V2_EVIDENCE.md`。该证据证明一次受约束的 policy evolution，不证明模型训练或任意 Supervisor Python code evolution。
+
 ### D-026：LoopGraph 必须是版本化 artifact，不得 hard-code
 
 决定：Supervisor Python 只提供通用 LoopSpec loader、interpreter 和安全 handler registry。节点、边、outcome 路由和 iteration budget 存放在 Git 管理的 `configs/loopspecs/<target>/<revision>.json` 中，并通过 immutable hash、predecessor binding 和 active revision 管理。

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 function canonical(value) {
     if (Array.isArray(value))
@@ -32,6 +32,19 @@ export function loadLoopSpec(path = fileURLToPath(new URL('../loopspec.v1.json',
         throw new Error('LoopSpec nodes or edges contain unknown fields');
     validateLoopSpec(value);
     return value;
+}
+export function loadActiveLoopSpec(path = fileURLToPath(new URL('../loopspec.active.json', import.meta.url))) {
+    const manifestPath = resolve(path);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (Object.keys(manifest).sort().join(',') !== ['active_revision', 'artifact', 'content_hash', 'schema_version', 'spec_id'].sort().join(',') || manifest.schema_version !== 1)
+        throw new Error('active LoopSpec manifest has an unexpected shape');
+    const artifact = String(manifest.artifact ?? '');
+    if (!artifact || artifact.includes('/') || artifact.includes('\\') || !artifact.endsWith('.json'))
+        throw new Error('active LoopSpec artifact must be a safe sibling JSON file');
+    const spec = loadLoopSpec(join(dirname(manifestPath), artifact));
+    if (spec.spec_id !== manifest.spec_id || spec.revision !== manifest.active_revision || loopSpecHash(spec) !== manifest.content_hash)
+        throw new Error('active LoopSpec manifest does not bind its artifact');
+    return spec;
 }
 function activePath(workspace) {
     const root = process.env.DSH_HOME || join(homedir(), '.dsh');

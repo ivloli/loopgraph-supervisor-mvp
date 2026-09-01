@@ -104,6 +104,39 @@ def load_loopspec(path: str | Path) -> LoopSpec:
     return spec
 
 
-def default_coding_spec() -> LoopSpec:
-    artifact = Path(__file__).resolve().parents[1] / "configs" / "loopspecs" / "coding-supervisor" / "v1.json"
+def load_active_loopspec(path: str | Path) -> LoopSpec:
+    manifest_path = Path(path).resolve()
+    document = json.loads(manifest_path.read_text())
+    if not isinstance(document, dict) or set(document) != {"schema_version", "spec_id", "active_revision", "artifact", "content_hash"} or document.get("schema_version") != 1:
+        raise ValueError("active LoopSpec manifest has an unexpected shape")
+    artifact_name = document["artifact"]
+    if not isinstance(artifact_name, str) or Path(artifact_name).name != artifact_name or not artifact_name.endswith(".json"):
+        raise ValueError("active LoopSpec artifact must be a safe sibling JSON file")
+    artifact_path = (manifest_path.parent / artifact_name).resolve()
+    try:
+        artifact_path.relative_to(manifest_path.parent)
+    except ValueError as error:
+        raise ValueError("active LoopSpec artifact escapes its manifest directory") from error
+    spec = load_loopspec(artifact_path)
+    if spec.spec_id != document["spec_id"] or spec.revision != document["active_revision"] or spec.content_hash() != document["content_hash"]:
+        raise ValueError("active LoopSpec manifest does not bind its artifact")
+    return spec
+
+
+def coding_spec_revision(revision: int) -> LoopSpec:
+    artifact = Path(__file__).resolve().parents[1] / "configs" / "loopspecs" / "coding-supervisor" / f"v{revision}.json"
     return load_loopspec(artifact)
+
+
+def coding_spec_chain() -> tuple[LoopSpec, ...]:
+    active = default_coding_spec()
+    specs = tuple(coding_spec_revision(revision) for revision in range(1, active.revision + 1))
+    for predecessor, candidate in zip(specs, specs[1:]):
+        if candidate.predecessor_hash != predecessor.content_hash():
+            raise ValueError("repository LoopSpec predecessor chain is invalid")
+    return specs
+
+
+def default_coding_spec() -> LoopSpec:
+    manifest = Path(__file__).resolve().parents[1] / "configs" / "loopspecs" / "coding-supervisor" / "active.json"
+    return load_active_loopspec(manifest)

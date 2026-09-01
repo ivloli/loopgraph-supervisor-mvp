@@ -5,7 +5,7 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
-  "files": ["lib", "loopspec.v1.json", "cordis.patch.yml", "README.md"],
+  "files": ["lib", "loopspec.v1.json", "loopspec.v2.json", "loopspec.active.json", "cordis.patch.yml", "README.md"],
   "license": "MIT",
   "keywords": ["dsh-plugin", "deepseek-harness", "loopgraph", "rsi", "supervisor"],
   "scripts": {

@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { appendLoopEvent, decision, foldState, initialState, loadLoopEvents, withLoopOperationLock } from '../lib/ledger.js'
 import { archiveReports, gitCandidateFingerprint, parsePorcelainPaths, prepareGitCandidate, rejectCandidate } from '../lib/git.js'
 import { apply, specRevision } from '../lib/index.js'
-import { loadLoopSpec, loadWorkspaceLoopSpec, loopSpecHash, nextNode, nodeForRole, validateLoopSpec } from '../lib/loopspec.js'
+import { loadActiveLoopSpec, loadLoopSpec, loadWorkspaceLoopSpec, loopSpecHash, nextNode, nodeForRole, validateLoopSpec } from '../lib/loopspec.js'
 import { verifyCommands } from '../lib/verifier.js'
 
 test('creates an explainable initial state and decision', () => {
@@ -34,6 +34,14 @@ test('B default LoopSpec is identical to the A repository artifact', () => {
   const shared = JSON.parse(readFileSync(join(process.cwd(), '../../configs/loopspecs/coding-supervisor/v1.json'), 'utf8'))
   assert.deepEqual(packaged, shared)
   assert.equal(loopSpecHash(packaged), readFileSync(join(process.cwd(), '../../configs/loopspecs/coding-supervisor/v1.sha256'), 'utf8').trim())
+})
+
+test('B packaged active manifest selects the merged v2 artifact', () => {
+  const active = loadActiveLoopSpec()
+  const shared = loadLoopSpec(join(process.cwd(), '../../configs/loopspecs/coding-supervisor/v2.json'))
+  assert.equal(active.revision, 2)
+  assert.equal(loopSpecHash(active), loopSpecHash(shared))
+  assert.equal(nextNode(active, nodeForRole(active, 'execute'), 'fail', 0), nodeForRole(active, 'human_gate'))
 })
 
 test('legacy uppercase node ids migrate onto the active LoopSpec roles', () => {

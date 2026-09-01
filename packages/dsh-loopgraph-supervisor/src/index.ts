@@ -12,7 +12,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { acquireWorkspaceLock, archiveReports, gitCandidateFingerprint, gitChangedFiles, gitHead, gitRollback, prepareGitCandidate, promotePreparedCandidate, rejectCandidate, releaseWorkspaceLock } from './git.js'
 import { verifyCommands } from './verifier.js'
 import { appendLoopEvent, decision, foldState, initialState, loadLoopEvents, withLoopOperationLock } from './ledger.js'
-import { loadLoopSpec, loadWorkspaceLoopSpec, loopSpecHash, nextNode, nodeForRole, saveWorkspaceLoopSpec } from './loopspec.js'
+import { loadActiveLoopSpec, loadLoopSpec, loadWorkspaceLoopSpec, loopSpecHash, nextNode, nodeForRole, saveWorkspaceLoopSpec } from './loopspec.js'
 import type { LoopSpec, Outcome } from './loopspec.js'
 import type { AcceptanceContract, LoopState } from './model.js'
 
@@ -314,7 +314,7 @@ function loopLogs(agent: Agent, limit = 20): unknown[] {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  const activeLoopSpec: LoopSpec = loadLoopSpec(config.loopSpecPath || undefined)
+  const activeLoopSpec: LoopSpec = config.loopSpecPath ? loadLoopSpec(config.loopSpecPath) : loadActiveLoopSpec()
   const recover = async (agent: Agent, current: LoopState, action: string, signal = new AbortController().signal): Promise<CommandResult> => {
     const cwd = agent.session.header.cwd
     if (!cwd || !current.baselineCommit) return { kind: 'error', text: 'recovery requires a Git workspace and baseline commit' }

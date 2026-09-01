@@ -17,6 +17,8 @@
 
 当前提升对象是 Supervisor Python/Policy/Verifier 代码和 Git 管理的 LoopSpec artifact。Supervisor engine 从版本化 JSON 加载 LoopGraph；项目不声称模型训练或无约束泛化。RSI 必须由任务 verifier feedback 或明确人工请求触发，并经过 Graph Gate、验证、PR 和人工晋级。
 
+第一次真实 LoopSpec RSI 晋级记录在 [docs/RSI_V2_EVIDENCE.md](docs/RSI_V2_EVIDENCE.md)：真实 DSH candidate 经过 Graph Gate、独立验证、GitHub PR、人工审批和 `loopspec-rsi-v2` tag。全新机器安装与运行步骤见 [docs/NEW_MACHINE_RUNBOOK.md](docs/NEW_MACHINE_RUNBOOK.md)。
+
 ## 官方 DSH SDK
 
 本项目使用官方仓库和 SDK：

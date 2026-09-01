@@ -9,7 +9,7 @@ import Schema from '@deepseek-ai/schemastery';
 import { acquireWorkspaceLock, archiveReports, gitCandidateFingerprint, gitChangedFiles, gitHead, gitRollback, prepareGitCandidate, promotePreparedCandidate, rejectCandidate, releaseWorkspaceLock } from './git.js';
 import { verifyCommands } from './verifier.js';
 import { appendLoopEvent, decision, foldState, initialState, loadLoopEvents, withLoopOperationLock } from './ledger.js';
-import { loadLoopSpec, loadWorkspaceLoopSpec, loopSpecHash, nextNode, nodeForRole, saveWorkspaceLoopSpec } from './loopspec.js';
+import { loadActiveLoopSpec, loadLoopSpec, loadWorkspaceLoopSpec, loopSpecHash, nextNode, nodeForRole, saveWorkspaceLoopSpec } from './loopspec.js';
 export const name = 'dsh-loopgraph-supervisor';
 export const inject = ['commands', 'agents', 'sessions', 'userQuestions'];
 export const Config = Schema.object({
@@ -302,7 +302,7 @@ function loopLogs(agent, limit = 20) {
     });
 }
 export function apply(ctx, config) {
-    const activeLoopSpec = loadLoopSpec(config.loopSpecPath || undefined);
+    const activeLoopSpec = config.loopSpecPath ? loadLoopSpec(config.loopSpecPath) : loadActiveLoopSpec();
     const recover = async (agent, current, action, signal = new AbortController().signal) => {
         const cwd = agent.session.header.cwd;
         if (!cwd || !current.baselineCommit)

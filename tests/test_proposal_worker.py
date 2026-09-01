@@ -5,7 +5,7 @@ from loopgraph_supervisor.candidate_store import CandidateStore
 from loopgraph_supervisor.evaluation import LoopSpecEvalTask
 from loopgraph_supervisor.evolution import LoopSpecEvolutionService
 from loopgraph_supervisor.evolution_trigger import EvolutionTriggerStore
-from loopgraph_supervisor.loopspec import default_coding_spec
+from loopgraph_supervisor.loopspec import coding_spec_revision, default_coding_spec
 from loopgraph_supervisor.proposal_worker import EvolutionProposalWorker
 from loopgraph_supervisor.spec_store import LoopSpecStore
 from loopgraph_supervisor.store import SQLiteStore
@@ -29,7 +29,7 @@ class Builder:
 def make_worker():
     store = SQLiteStore(":memory:")
     specs = LoopSpecStore(store)
-    specs.save(default_coding_spec(), status="ACTIVE")
+    specs.save(coding_spec_revision(1), status="ACTIVE")
     triggers = EvolutionTriggerStore(store)
     evolution = LoopSpecEvolutionService(specs, CandidateStore(store), Holdout())
     return EvolutionProposalWorker(triggers, evolution, Builder()), triggers

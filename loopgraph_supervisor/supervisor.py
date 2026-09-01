@@ -7,7 +7,7 @@ from .domain import AgentInput, AgentOutput, DecisionRecord, ImprovementProposal
 from .evolution_run import EvolutionRunStore
 from .evolution_trigger import EvolutionTriggerStore
 from .git_workspace import GitWorkspace
-from .loopspec import LoopSpec, default_coding_spec, load_loopspec
+from .loopspec import LoopSpec, coding_spec_chain, load_loopspec
 from .loopspec_interpreter import LoopSpecInterpreter
 from .ports import AgentExecutor, Verifier
 from .proposal_worker import EvolutionProposalWorker, ProposalResult
@@ -29,10 +29,14 @@ class Supervisor:
         self.specs = LoopSpecStore(store)
         self.evolution_triggers = EvolutionTriggerStore(store)
         self.evolution_runs = EvolutionRunStore(store)
-        self.default_spec = load_loopspec(loopspec_path) if loopspec_path else default_coding_spec()
+        initial_specs = (load_loopspec(loopspec_path),) if loopspec_path else coding_spec_chain()
+        self.default_spec = initial_specs[-1]
         self._validate_runtime_nodes(self.default_spec)
         if self.specs.active(self.default_spec.spec_id) is None:
-            self.specs.save(self.default_spec, status="ACTIVE")
+            self.specs.save(initial_specs[0], status="ACTIVE")
+            for spec in initial_specs[1:]:
+                self.specs.save(spec, status="CANDIDATE")
+                self.specs.save(spec, status="ACTIVE", allow_human_activation=True)
 
     def _workflow_lock(self, workflow_id: str) -> RLock:
         with self._locks_guard:
@@ -130,11 +134,15 @@ class Supervisor:
                 workspace = workflow.acceptance.get("workspace")
                 if not workspace or GitWorkspace(workspace).candidate_fingerprint() != context.get("candidate_fingerprint"):
                     raise ValueError("candidate changed after review; re-run verification before approval")
-                workflow.status, workflow.current_node = WorkflowStatus.RUNNING, self._node(self._spec_next("hitl", "approve", workflow.attempt - 1))
+                if context.get("loop_spec_revision") != workflow.spec_revision or context.get("loop_spec_hash") != workflow.spec_hash:
+                    raise ValueError("approval request does not match the workflow LoopSpec")
+                workflow.status, workflow.current_node = WorkflowStatus.RUNNING, self._node(workflow, self._spec_next(workflow, "hitl", "approve", workflow.attempt - 1))
             elif decision == "retry":
-                workflow.status, workflow.current_node = WorkflowStatus.RUNNING, self._node(self._spec_next("hitl", "retry", workflow.attempt - 1))
+                if workflow.attempt >= workflow.max_attempts:
+                    raise ValueError("HITL retry budget is exhausted")
+                workflow.status, workflow.current_node = WorkflowStatus.RUNNING, self._node(workflow, self._spec_next(workflow, "hitl", "retry", workflow.attempt - 1))
             else:
-                workflow.status, workflow.current_node = WorkflowStatus.FAILED, self._node(self._spec_next("hitl", "reject", workflow.attempt - 1))
+                workflow.status, workflow.current_node = WorkflowStatus.FAILED, self._node(workflow, self._spec_next(workflow, "hitl", "reject", workflow.attempt - 1))
             self.store.resolve_hitl(request["id"], decision)
             self._decision(workflow, "HITL", "What should happen after human review?", decision, [f"Human selected {decision}"], [{"hitl_request": request["id"], "attempt": context.get("attempt"), "spec_revision": context.get("spec_revision"), "candidate_fingerprint": context.get("candidate_fingerprint")}], [{"option": option, "rejected_because": "not selected"} for option in ("approve", "retry", "reject") if option != decision], "Human decision overrides automatic policy", f"Move workflow to {workflow.current_node.value}")
             self.store.save_workflow(workflow)
@@ -242,7 +250,7 @@ class Supervisor:
         else:
             self.store.finish_execution(token, "COMPLETED")
             self._decision(workflow, "RECOVER", "Why avoid invoking DSH again?", "reuse_attempt", ["A durable result already exists for this execution token"], [{"execution_token": token}], [], "The external call may already have side effects", "Reuse the recorded result and preserve idempotency")
-        workflow.current_node = self._node(self._spec_next("execute", "pass", workflow.attempt - 1))
+        workflow.current_node = self._node(workflow, self._spec_next(workflow, "execute", "pass", workflow.attempt - 1))
         self._save_transition(workflow, from_node)
 
     def _verify(self, workflow: Workflow) -> None:
@@ -271,21 +279,21 @@ class Supervisor:
             if workflow.acceptance.get("require_promotion_approval", True):
                 request_id = f"hitl:promote:{workflow.id}:{workflow.attempt}"
                 candidate_fingerprint = GitWorkspace(workspace).candidate_fingerprint() if workspace else ""
-                self.store.save_hitl(request_id, workflow.id, "promotion_review", {"attempt": workflow.attempt, "spec_revision": workflow.acceptance.get("spec_revision"), "candidate_fingerprint": candidate_fingerprint, "evidence": result.evidence, "changed_files": [item.get("changed_files", []) for item in result.evidence if item.get("type") == "git_scope"]})
-                workflow.status, workflow.current_node = WorkflowStatus.WAITING_HITL, self._node(self._spec_next("verify", "approve", workflow.attempt - 1))
+                self.store.save_hitl(request_id, workflow.id, "promotion_review", {"attempt": workflow.attempt, "spec_revision": workflow.acceptance.get("spec_revision"), "loop_spec_revision": workflow.spec_revision, "loop_spec_hash": workflow.spec_hash, "candidate_fingerprint": candidate_fingerprint, "evidence": result.evidence, "changed_files": [item.get("changed_files", []) for item in result.evidence if item.get("type") == "git_scope"]})
+                workflow.status, workflow.current_node = WorkflowStatus.WAITING_HITL, self._node(workflow, self._spec_next(workflow, "verify", "approve", workflow.attempt - 1))
                 self._decision(workflow, "PROMOTION_REVIEW_REQUIRED", "Why pause before creating a Git version?", "wait_for_human", ["Independent verification passed", "Human review is required before AI-authored changes enter Git history"], result.evidence, [{"option": "auto_promote", "rejected_because": "promotion approval policy is enabled"}], "The candidate has not been committed yet", "Let a human inspect evidence and approve, retry, or reject")
             else:
-                workflow.current_node = self._node(self._spec_next("verify", "auto_promote", workflow.attempt - 1))
+                workflow.current_node = self._node(workflow, self._spec_next(workflow, "verify", "auto_promote", workflow.attempt - 1))
                 self._decision(workflow, "VERIFY_PASS", "Why can this artifact advance?", "promote_candidate", ["Verifier passed", "Promotion approval is explicitly disabled for this contract"], result.evidence, [], "Promotion makes the artifact active", "Create a new promoted version")
         elif workflow.attempt < workflow.max_attempts:
             proposal = ImprovementProposal(f"proposal:{workflow.id}:{workflow.attempt}", workflow.id, workflow.attempt, result.feedback, "Address the verifier feedback in the next DSH session", ["Use verifier feedback as the next prompt context"], ["The next verification passes", "No new verification failure is introduced"], "LOW")
             self.store.save_proposal(proposal)
-            workflow.current_node = self._node(self._spec_next("verify", "retry", workflow.attempt - 1))
+            workflow.current_node = self._node(workflow, self._spec_next(workflow, "verify", "retry", workflow.attempt - 1))
             self._decision(workflow, "RETRY", "Why retry instead of stopping?", "retry", ["Verification failed but the retry budget remains"], result.evidence, [{"option": "fail", "rejected_because": "retry budget remains"}], "Repeated execution can create additional workspace changes", "Ask DSH to address the feedback")
         else:
             request_id = f"hitl:{workflow.id}:{workflow.attempt}"
             self.store.save_hitl(request_id, workflow.id, "max_attempts_reached", {"feedback": result.feedback, "evidence": result.evidence})
-            workflow.status, workflow.current_node = WorkflowStatus.WAITING_HITL, self._node(self._spec_next("verify", "exhausted", workflow.attempt - 1))
+            workflow.status, workflow.current_node = WorkflowStatus.WAITING_HITL, self._node(workflow, self._spec_next(workflow, "verify", "exhausted", workflow.attempt - 1))
             self._decision(workflow, "HITL_REQUIRED", "Why require a human?", "wait_for_human", ["Verification failed", "Automatic retry budget is exhausted"], result.evidence, [{"option": "retry", "rejected_because": "automatic budget exhausted"}, {"option": "reject", "rejected_because": "human must choose"}], "Continuing without review may make an unjustified change", "Pause until a human approves, retries, or rejects")
         self._save_transition(workflow, from_node)
 
@@ -302,7 +310,7 @@ class Supervisor:
         version = Version(f"version:{workflow.id}:{workflow.attempt}", workflow.id, workflow.active_version, artifact)
         self.store.save_version(version)
         workflow.active_version = version.id
-        workflow.current_node, workflow.status = self._node(self._spec_next("promote", "pass", workflow.attempt - 1)), WorkflowStatus.COMPLETED
+        workflow.current_node, workflow.status = self._node(workflow, self._spec_next(workflow, "promote", "pass", workflow.attempt - 1)), WorkflowStatus.COMPLETED
         self._save_transition(workflow, from_node)
 
     def _decision(self, workflow: Workflow, decision_type: str, question: str, decision: str, rationale: list[str], evidence: list[dict[str, Any]], alternatives: list[dict[str, str]], risk: str, expected_effect: str) -> None:
@@ -324,8 +332,20 @@ class Supervisor:
         self.store.save_workflow(workflow)
         self.store.append_event(workflow.id, "state_transition", from_node=from_node.value, to_node=workflow.current_node.value, payload={"status": workflow.status.value, "attempt": workflow.attempt})
 
-    def _spec_next(self, source: str, outcome: str, iteration: int) -> str:
-        spec = self.specs.active("coding-supervisor") or self.default_spec
+    def _workflow_spec(self, workflow: Workflow) -> LoopSpec:
+        spec = self.specs.revision(workflow.spec_id, workflow.spec_revision)
+        if not workflow.spec_hash:
+            spec = self.specs.active(workflow.spec_id) or self.default_spec
+            workflow.spec_id = spec.spec_id
+            workflow.spec_revision = spec.revision
+            workflow.spec_hash = spec.content_hash()
+            self.store.save_workflow(workflow)
+        if spec is None or spec.content_hash() != workflow.spec_hash:
+            raise RuntimeError("workflow LoopSpec revision/hash is unavailable or changed")
+        return spec
+
+    def _spec_next(self, workflow: Workflow, source: str, outcome: str, iteration: int) -> str:
+        spec = self._workflow_spec(workflow)
         source_id = self._spec_node_for_role(spec, source)
         return LoopSpecInterpreter(spec).transition(source_id, outcome, max(iteration, 0)).target  # type: ignore[arg-type]
 
@@ -345,8 +365,8 @@ class Supervisor:
         if unknown:
             raise ValueError(f"LoopSpec contains unsupported runtime node kinds: {unknown}")
 
-    def _node(self, node_id: str) -> Node:
-        spec = self.specs.active("coding-supervisor") or self.default_spec
+    def _node(self, workflow: Workflow, node_id: str) -> Node:
+        spec = self._workflow_spec(workflow)
         node = next((item for item in spec.nodes if item.id == node_id), None)
         nodes = {"execute": Node.EXECUTE, "verify": Node.VERIFY, "human_gate": Node.HITL, "promote": Node.PROMOTE, "complete": Node.COMPLETE, "failed": Node.FAILED}
         try:

@@ -5,7 +5,7 @@ from typing import Any
 
 from .domain import AgentInput, AgentOutput, DecisionRecord, ImprovementProposal, Node, Version, Workflow, WorkflowStatus, utc_now
 from .evolution_run import EvolutionRunStore
-from .evolution_trigger import EvolutionTriggerStore
+from .evolution_trigger import EvolutionTriggerStore, TaskFeedback
 from .git_workspace import GitWorkspace
 from .loopspec import LoopSpec, coding_spec_chain, load_loopspec
 from .loopspec_interpreter import LoopSpecInterpreter
@@ -275,6 +275,11 @@ class Supervisor:
                 result.passed = False
                 result.feedback += f"\nChanged files outside allowed scope: {changed}"
         self.store.save_verification(workflow.id, workflow.attempt, result.passed, result.feedback, result.evidence)
+        if not result.passed:
+            failures = tuple(TaskFeedback(item["workflow_id"], int(item["attempt"]), False, str(item["feedback"])) for item in self.store.failed_verification_feedback())
+            created = self.evolution_triggers.create_task_feedback_request(workflow.spec_id, failures)
+            if created is not None:
+                self._decision(workflow, "EVOLUTION_TRIGGERED", "Why request a Supervisor policy review?", "trigger_evolution", ["Repeated verifier failures were observed across task attempts"], [{"trigger_id": created[0], "source": "task_feedback", "failure_count": len(created[1].evidence)}], [], "The current policy may be causing repeated unproductive failures", "Queue one durable RSI proposal for Host review")
         if result.passed:
             if workspace and GitWorkspace(workspace).available:
                 prepared = GitWorkspace(workspace).prepare_candidate(workflow.id, workflow.attempt)

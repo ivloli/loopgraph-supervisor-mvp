@@ -161,6 +161,10 @@ class SQLiteStore:
     def latest_verification(self, workflow_id: str) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM verifications WHERE workflow_id=? ORDER BY id DESC LIMIT 1", (workflow_id,)).fetchone()
 
+    def failed_verification_feedback(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT workflow_id,attempt,passed,feedback FROM verifications WHERE passed=0 ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
     def latest_proposal(self, workflow_id: str) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM proposals WHERE workflow_id=? ORDER BY created_at DESC LIMIT 1", (workflow_id,)).fetchone()
 
